@@ -66,16 +66,35 @@ async def clean_state(monkeypatch):
     await redis.flushdb()
 
     sent: list[tuple[str, dict]] = []
+    # What the fake Telegram currently has set; tests can change it.
+    bot = {"webhook": "https://api.example.com/bot/webhook", "menu": "https://app.example.com/",
+           "refuse_webhook": ""}
 
     async def fake_call(method, payload, token=None):
         sent.append((method, payload))
         if method == "getChatMember":
             return {"status": "member"}
         if method == "getMe":
-            return None if token == "bad-token" else {"id": 1, "username": "NewBot"}
+            if token == "bad-token":
+                telegram._last_error = "Unauthorized"
+                return None
+            return {"id": 1, "username": "NewBot"}
         if method == "setWebhook":
+            if bot["refuse_webhook"]:
+                telegram._last_error = bot["refuse_webhook"]
+                return None
+            bot["webhook"] = payload["url"]
             return True
+        if method == "setChatMenuButton":
+            bot["menu"] = payload["menu_button"]["web_app"]["url"]
+            return True
+        if method == "getWebhookInfo":
+            return {"url": bot["webhook"], "pending_update_count": 0}
+        if method == "getChatMenuButton":
+            return {"type": "web_app", "text": "Open", "web_app": {"url": bot["menu"]}}
         return {"message_id": 1}
+
+    fake_call.bot = bot
 
     monkeypatch.setattr(telegram, "call", fake_call)
     yield sent
@@ -84,6 +103,12 @@ async def clean_state(monkeypatch):
 @pytest.fixture
 def sent(clean_state):
     return clean_state
+
+
+@pytest.fixture
+def fake_bot(clean_state):
+    """State of the fake Telegram bot (webhook URL, menu URL, refuse_webhook reason)."""
+    return telegram.call.bot
 
 
 @pytest.fixture

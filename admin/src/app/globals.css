@@ -413,3 +413,7 @@ td.actions-cell { text-align: right; width: 1%; }
   .content { padding: 20px 16px 48px; }
   .form-row { grid-template-columns: 1fr; }
 }
+
+/* Inset panel inside a card (e.g. live status) */
+.card-inset { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.card-inset h4 { font-size: 14px; font-weight: 600; }

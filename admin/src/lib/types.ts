@@ -37,3 +37,17 @@ export type Settings = {
   airdrop_address: string | null;
   signer_address: string | null;
 };
+
+export type TelegramStatus = {
+  token_set: boolean;
+  username: string;
+  reachable: boolean;
+  webhook_url: string;
+  expected_webhook_url: string;
+  webhook_ok: boolean;
+  pending_updates: number;
+  last_error: string;
+  menu_url: string;
+  expected_menu_url: string;
+  menu_ok: boolean;
+};

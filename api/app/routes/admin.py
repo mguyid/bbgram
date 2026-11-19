@@ -45,7 +45,6 @@ from app.security import (
     verify_password,
     verify_totp,
 )
-from app.settings import settings
 from app.snapshots import build_airdrop, compute_allocations, create_snapshot, wei_to_str
 
 router = APIRouter(prefix="/admin-api")
@@ -684,15 +683,13 @@ async def write_settings(body: dict[str, Any] = Body(...), admin: Admin = Depend
         token = values["telegram_bot_token"]
         values.update({"telegram_bot_username": "", "telegram_webhook_ok": ""})
         if token:
-            me = await telegram.call("getMe", {}, token=token)
-            if not me:
-                raise HTTPException(400, "Telegram rejected this bot token.")
             secret = rt.telegram_webhook_secret or secrets.token_urlsafe(32)
-            ok = await telegram.call("setWebhook", {
-                "url": settings.API_PUBLIC_URL.rstrip("/") + "/bot/webhook", "secret_token": secret,
-            }, token=token)
-            values.update({"telegram_bot_username": me.get("username", ""), "telegram_webhook_secret": secret,
-                           "telegram_webhook_ok": "true" if ok else ""})
+            try:
+                bot = await telegram.connect_bot(token, secret)
+            except telegram.BotSetupError as e:
+                raise HTTPException(400, str(e)) from e
+            values.update({"telegram_bot_username": bot["username"], "telegram_webhook_secret": secret,
+                           "telegram_webhook_ok": "true"})
 
     if "presale_address" in values:
         if values["presale_address"]:
@@ -715,6 +712,30 @@ async def write_settings(body: dict[str, Any] = Body(...), admin: Admin = Depend
     await session.commit()
     runtime.invalidate()
     return await read_settings(admin)
+
+
+@router.get("/settings/telegram")
+async def telegram_status(admin: Admin = Depends(current_admin)):
+    """Live bot status from Telegram: webhook target, last delivery error, menu button."""
+    return await telegram.bot_status()
+
+
+@router.post("/settings/telegram/reconnect")
+async def telegram_reconnect(admin: Admin = Depends(owner_admin), session: AsyncSession = Depends(get_session)):
+    rt = await runtime.get()
+    if not rt.telegram_bot_token:
+        raise HTTPException(400, "Save a bot token first.")
+    secret = rt.telegram_webhook_secret or secrets.token_urlsafe(32)
+    try:
+        bot = await telegram.connect_bot(rt.telegram_bot_token, secret)
+    except telegram.BotSetupError as e:
+        raise HTTPException(400, str(e)) from e
+    await runtime.save(session, {"telegram_bot_username": bot["username"], "telegram_webhook_secret": secret,
+                                 "telegram_webhook_ok": "true"})
+    await audit(session, admin, "settings.telegram_reconnect", None)
+    await session.commit()
+    runtime.invalidate()
+    return await telegram.bot_status()
 
 
 @router.post("/settings/rotate-signer")

@@ -30,7 +30,10 @@ docker run -p 3001:3001 baby-grand-admin
 ```
 
 Pages of note:
-- **Settings** — Telegram bot, X app, chain id / RPC, contract addresses and the presale signer (`/admin-api/settings`). Owner edits; others read.
+- **Settings** — one tab each for Telegram, X, Chain, Contracts and Presale signer; each tab saves only its own
+  values (`/admin-api/settings`). Saving the bot token connects the bot: webhook to the API and the menu button to the
+  mini app. The Telegram tab shows live status from Telegram (`/admin-api/settings/telegram`) and has Reconnect. The
+  worker re-checks the bot every 10 minutes and after each deploy. Owner edits; others read.
 - **Contracts** — current on-chain values of Token, Presale and Airdrop, and a form for every owner setter, signed with the
   connected owner wallet (Reown AppKit). Chain and addresses come from Settings. Each confirmed tx is written to the audit log.
   `/contracts?root=0x…` preselects a Merkle root (linked from a built airdrop).

@@ -70,8 +70,8 @@ async def test_bot_token_save_sets_webhook(client, admin_headers, sent):
     assert r.status_code == 200
     got = r.json()
     assert got["telegram_bot_username"] == "NewBot" and got["telegram_webhook_ok"] is True
-    method, payload = sent[-1]
-    assert method == "setWebhook" and payload["url"] == "https://api.example.com/bot/webhook"
+    payload = [p for m, p in sent if m == "setWebhook"][-1]
+    assert payload["url"] == "https://api.example.com/bot/webhook"
     secret = payload["secret_token"]
     assert len(secret) >= 32 and runtime.decrypt(await raw_setting("telegram_webhook_secret")) == secret
     assert runtime.decrypt(await raw_setting("telegram_bot_token")) == "999:NEW"
@@ -170,3 +170,37 @@ async def test_web3_client_shared_per_rpc_url():
     assert await chain.w3("http://rpc-a.invalid") is a
     b = await chain.w3("http://rpc-b.invalid")
     assert b is not a and await chain.w3("http://rpc-b.invalid") is b
+
+
+async def test_bot_token_save_sets_menu_button_and_reports_status(client, admin_headers, sent, fake_bot):
+    fake_bot.update(webhook="", menu="")
+    r = await client.put("/admin-api/settings", headers=admin_headers, json={"telegram_bot_token": "999:NEW"})
+    assert r.status_code == 200
+    menu = [p for m, p in sent if m == "setChatMenuButton"][-1]["menu_button"]
+    assert menu == {"type": "web_app", "text": "Open", "web_app": {"url": "https://app.example.com/"}}
+    status = (await client.get("/admin-api/settings/telegram", headers=admin_headers)).json()
+    assert status["webhook_ok"] and status["menu_ok"] and status["username"] == "NewBot"
+    assert status["webhook_url"] == "https://api.example.com/bot/webhook"
+
+
+async def test_bot_token_save_fails_loudly_when_webhook_refused(client, admin_headers, fake_bot):
+    fake_bot["refuse_webhook"] = "Bad Request: bad webhook: HTTPS url must be provided for webhook"
+    r = await client.put("/admin-api/settings", headers=admin_headers, json={"telegram_bot_token": "999:NEW"})
+    assert r.status_code == 400 and "HTTPS url must be provided" in r.json()["detail"]
+    # the token was not saved
+    assert runtime.decrypt(await raw_setting("telegram_bot_token")) == "123456:TEST-TOKEN"
+
+
+async def test_bot_reconnect_and_ensure_bot(client, admin_headers, fake_bot):
+    from app import telegram
+    fake_bot.update(webhook="https://old.example.com/bot/webhook", menu="")
+    status = (await client.get("/admin-api/settings/telegram", headers=admin_headers)).json()
+    assert not status["webhook_ok"] and not status["menu_ok"]
+    assert await telegram.ensure_bot() == "reconnected"
+    assert fake_bot["webhook"] == "https://api.example.com/bot/webhook" and fake_bot["menu"] == "https://app.example.com/"
+    assert await telegram.ensure_bot() == "ok"
+    fake_bot["webhook"] = ""
+    r = await client.post("/admin-api/settings/telegram/reconnect", headers=admin_headers)
+    assert r.status_code == 200 and r.json()["webhook_ok"]
+    viewer = await admin_login(client, "v@example.com", "viewer")
+    assert (await client.post("/admin-api/settings/telegram/reconnect", headers=viewer)).status_code == 403
