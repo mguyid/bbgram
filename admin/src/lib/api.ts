@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type Role = "owner" | "admin" | "viewer";
-export type Admin = { id: number | string; email: string; role: Role };
+export type Admin = { id: number | string; email: string; role: Role; totp_enabled?: boolean };
 
 const BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "") + "/admin-api";
 const TOKEN_KEY = "bg_admin_token";

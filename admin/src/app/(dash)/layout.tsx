@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   Ticket,
   AtSign,
+  UserCog,
   Users,
 } from "lucide-react";
 import { api, getStoredAdmin, getToken, logout, setStoredAdmin, type Admin } from "@/lib/api";
@@ -34,6 +35,7 @@ const NAV = [
   { href: "/admins", label: "Admins", icon: ShieldCheck, ownerOnly: true },
   { href: "/backup", label: "Backup", icon: Archive, ownerOnly: true },
   { href: "/audit", label: "Audit log", icon: FileClock },
+  { href: "/account", label: "Account", icon: UserCog },
 ];
 
 export default function DashLayout({ children }: { children: React.ReactNode }) {

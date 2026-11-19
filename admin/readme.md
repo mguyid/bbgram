@@ -39,5 +39,7 @@ Pages of note:
   Encrypted settings only work with the same `JWT_SECRET`. Backup files hold password hashes, 2FA secrets and encrypted
   keys: store them somewhere safe.
 
-Sign in with an admin created by `python -m app.cli create-admin <email> <password> owner` (api). The JWT is kept in
+Sign in with an admin created by `python -m app.cli create-admin <email> <password> owner` (run in the api container,
+e.g. Coolify → api → Terminal), using just email and password. 2FA is optional: each admin turns it on under
+**Account** (scan the QR code, confirm a code). Once on, sign-in also asks for the 6-digit code. The JWT is kept in
 sessionStorage; any 401 sends you back to the login page. `viewer` admins see everything read-only.

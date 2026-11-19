@@ -15,13 +15,13 @@ async def _create_admin(email: str, password: str, role: str) -> int:
         return 2
     async with SessionLocal() as session:
         try:
-            admin, uri = await create_admin(session, email, password, role)
+            admin = await create_admin(session, email, password, role)
         except HTTPException as e:
             print(e.detail, file=sys.stderr)
             return 1
         await session.commit()
     print(f"Created {role} {admin.email} (id {admin.id})")
-    print(f"TOTP URI (add to your authenticator app): {uri}")
+    print("Sign in with email and password. 2FA is optional: turn it on in the dashboard under Account.")
     return 0
 
 

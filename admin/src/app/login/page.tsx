@@ -10,6 +10,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState("");
+  const [needsTotp, setNeedsTotp] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +30,10 @@ export default function LoginPage() {
       setSession(res.token, res.admin);
       router.replace("/");
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      // The 2FA field only appears for admins who turned 2FA on.
+      if (msg === "Enter your 2FA code.") setNeedsTotp(true);
+      setError(msg);
       setBusy(false);
     }
   };
@@ -40,7 +44,13 @@ export default function LoginPage() {
         <h1>Baby Grand Admin</h1>
         <label className="field">
           <span>Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="username"
+          />
         </label>
         <label className="field">
           <span>Password</span>
@@ -52,19 +62,22 @@ export default function LoginPage() {
             autoComplete="current-password"
           />
         </label>
-        <label className="field">
-          <span>2FA code</span>
-          <input
-            inputMode="numeric"
-            pattern="[0-9]{6}"
-            maxLength={6}
-            value={totp}
-            onChange={(e) => setTotp(e.target.value.replace(/\D/g, ""))}
-            required
-            autoComplete="one-time-code"
-            placeholder="123456"
-          />
-        </label>
+        {needsTotp && (
+          <label className="field">
+            <span>2FA code</span>
+            <input
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={totp}
+              onChange={(e) => setTotp(e.target.value.replace(/\D/g, ""))}
+              required
+              autoComplete="one-time-code"
+              placeholder="123456"
+              autoFocus
+            />
+          </label>
+        )}
         <ErrorBox error={error} />
         <button className="btn primary" type="submit" disabled={busy}>
           {busy ? "Signing in…" : "Sign in"}

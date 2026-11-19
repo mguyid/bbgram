@@ -52,7 +52,7 @@ router = APIRouter(prefix="/admin-api")
 
 
 def admin_out(a: Admin) -> dict:
-    return {"id": a.id, "email": a.email, "role": a.role}
+    return {"id": a.id, "email": a.email, "role": a.role, "totp_enabled": bool(a.totp_secret)}
 
 
 async def audit(session: AsyncSession, admin: Admin, action: str, target: Any = None,
@@ -71,7 +71,7 @@ def page_args(page: int, page_size: int) -> tuple[int, int]:
 class LoginIn(BaseModel):
     email: str
     password: str
-    totp: str
+    totp: str = ""
 
 
 @router.post("/auth/login", dependencies=[Depends(ip_rate_limit("admin_login", 10))])
@@ -79,15 +79,70 @@ async def login(body: LoginIn, session: AsyncSession = Depends(get_session)):
     admin = (await session.execute(
         select(Admin).where(func.lower(Admin.email) == body.email.strip().lower())
     )).scalar_one_or_none()
-    if not admin or not verify_password(admin.password_hash, body.password) or not verify_totp(
-        admin.totp_secret, body.totp
-    ):
-        raise HTTPException(401, "Wrong email, password or code.")
+    if not admin or not verify_password(admin.password_hash, body.password):
+        raise HTTPException(401, "Wrong email or password.")
+    # 2FA is only checked for admins who turned it on in their dashboard.
+    if admin.totp_secret:
+        if not body.totp.strip():
+            raise HTTPException(401, "Enter your 2FA code.")
+        if not verify_totp(admin.totp_secret, body.totp):
+            raise HTTPException(401, "Wrong 2FA code.")
     return {"token": make_token(admin.id, "admin", ADMIN_TOKEN_TTL), "admin": admin_out(admin)}
 
 
 @router.get("/me")
 async def me(admin: Admin = Depends(current_admin)):
+    return admin_out(admin)
+
+
+# ---------- own 2FA (optional, set up from the dashboard) ----------
+
+TOTP_SETUP_TTL = 600
+
+
+def _setup_key(admin: Admin) -> str:
+    return f"admin_totp_setup:{admin.id}"
+
+
+class TotpCodeIn(BaseModel):
+    code: str
+
+
+@router.post("/me/2fa/setup")
+async def totp_setup(admin: Admin = Depends(current_admin)):
+    """Start enabling 2FA: returns a new secret, kept pending until confirmed with a code."""
+    if admin.totp_secret:
+        raise HTTPException(400, "2FA is already on.")
+    secret = new_totp_secret()
+    await redis.set(_setup_key(admin), secret, ex=TOTP_SETUP_TTL)
+    return {"secret": secret, "uri": totp_uri(secret, admin.email)}
+
+
+@router.post("/me/2fa/enable")
+async def totp_enable(body: TotpCodeIn, admin: Admin = Depends(current_admin),
+                      session: AsyncSession = Depends(get_session)):
+    secret = await redis.get(_setup_key(admin))
+    if not secret:
+        raise HTTPException(400, "Setup expired. Start again.")
+    if not verify_totp(secret, body.code):
+        raise HTTPException(400, "Wrong code. Check your authenticator app and try again.")
+    admin.totp_secret = secret
+    await audit(session, admin, "admin.2fa_enable", admin.id)
+    await session.commit()
+    await redis.delete(_setup_key(admin))
+    return admin_out(admin)
+
+
+@router.post("/me/2fa/disable")
+async def totp_disable(body: TotpCodeIn, admin: Admin = Depends(current_admin),
+                       session: AsyncSession = Depends(get_session)):
+    if not admin.totp_secret:
+        raise HTTPException(400, "2FA is not on.")
+    if not verify_totp(admin.totp_secret, body.code):
+        raise HTTPException(400, "Wrong 2FA code.")
+    admin.totp_secret = None
+    await audit(session, admin, "admin.2fa_disable", admin.id)
+    await session.commit()
     return admin_out(admin)
 
 
@@ -700,26 +755,25 @@ class AdminIn(BaseModel):
     role: Literal["owner", "admin", "viewer"]
 
 
-async def create_admin(session: AsyncSession, email: str, password: str, role: str) -> tuple[Admin, str]:
+async def create_admin(session: AsyncSession, email: str, password: str, role: str) -> Admin:
     email = email.strip().lower()
     if (await session.execute(select(Admin).where(func.lower(Admin.email) == email))).first():
         raise HTTPException(409, "An admin with this email already exists.")
     if len(password) < 10:
         raise HTTPException(400, "Password must be at least 10 characters.")
-    secret = new_totp_secret()
-    a = Admin(email=email, password_hash=hash_password(password), totp_secret=secret, role=role)
+    a = Admin(email=email, password_hash=hash_password(password), role=role)
     session.add(a)
     await session.flush()
-    return a, totp_uri(secret, email)
+    return a
 
 
 @router.post("/admins")
 async def add_admin(body: AdminIn, admin: Admin = Depends(owner_admin),
                     session: AsyncSession = Depends(get_session)):
-    new, uri = await create_admin(session, body.email, body.password, body.role)
+    new = await create_admin(session, body.email, body.password, body.role)
     await audit(session, admin, "admin.create", new.id, {"email": new.email, "role": new.role})
     await session.commit()
-    return {"admin": admin_out(new), "totp_uri": uri}
+    return {"admin": admin_out(new)}
 
 
 @router.delete("/admins/{admin_id}")

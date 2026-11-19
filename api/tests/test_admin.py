@@ -14,23 +14,44 @@ from tests.conftest import admin_login, login, set_runtime
 from tests.test_crypto import oz_verify
 
 
-async def test_admin_login_requires_totp(client):
+async def test_admin_login_and_optional_2fa(client):
     async with SessionLocal() as s:
-        _, uri = await create_admin(s, "Boss@Example.com", "correct-horse-battery", "owner")
+        await create_admin(s, "Boss@Example.com", "correct-horse-battery", "owner")
         await s.commit()
-    totp = pyotp.parse_uri(uri)
     body = {"email": "boss@example.com", "password": "correct-horse-battery"}
-    assert (await client.post("/admin-api/auth/login", json={**body, "totp": "000000"})).status_code == 401
-    bad_pw = {**body, "password": "wrong-password", "totp": totp.now()}
-    assert (await client.post("/admin-api/auth/login", json=bad_pw)).status_code == 401
-    r = await client.post("/admin-api/auth/login", json={**body, "totp": totp.now()})
+    assert (await client.post("/admin-api/auth/login",
+                              json={**body, "password": "wrong-password"})).status_code == 401
+    # no 2FA configured: email + password is enough
+    r = await client.post("/admin-api/auth/login", json=body)
     assert r.status_code == 200
     assert r.json()["admin"]["role"] == "owner"
-    me = await client.get("/admin-api/me", headers={"Authorization": f"Bearer {r.json()['token']}"})
-    assert me.json() == {"id": 1, "email": "boss@example.com", "role": "owner"}
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    me = await client.get("/admin-api/me", headers=h)
+    assert me.json() == {"id": 1, "email": "boss@example.com", "role": "owner", "totp_enabled": False}
+
+    # turn 2FA on from the dashboard: setup, then confirm with a code
+    setup = (await client.post("/admin-api/me/2fa/setup", headers=h)).json()
+    assert setup["uri"].startswith("otpauth://totp/")
+    totp = pyotp.TOTP(setup["secret"])
+    assert (await client.post("/admin-api/me/2fa/enable", headers=h, json={"code": "000000"})).status_code == 400
+    r = await client.post("/admin-api/me/2fa/enable", headers=h, json={"code": totp.now()})
+    assert r.status_code == 200 and r.json()["totp_enabled"] is True
+    assert (await client.post("/admin-api/me/2fa/setup", headers=h)).status_code == 400
+
+    # now login needs the code
+    assert (await client.post("/admin-api/auth/login", json=body)).status_code == 401
+    assert (await client.post("/admin-api/auth/login", json={**body, "totp": "000000"})).status_code == 401
+    assert (await client.post("/admin-api/auth/login", json={**body, "totp": totp.now()})).status_code == 200
+
+    # turning it off needs a valid code too
+    assert (await client.post("/admin-api/me/2fa/disable", headers=h, json={"code": "000000"})).status_code == 400
+    r = await client.post("/admin-api/me/2fa/disable", headers=h, json={"code": totp.now()})
+    assert r.json()["totp_enabled"] is False
+    assert (await client.post("/admin-api/auth/login", json=body)).status_code == 200
+
     # a user token is not an admin token
-    h, _ = await login(client, 1, "alice")
-    assert (await client.get("/admin-api/me", headers={"Authorization": h["Authorization"]})).status_code == 401
+    uh, _ = await login(client, 1, "alice")
+    assert (await client.get("/admin-api/me", headers={"Authorization": uh["Authorization"]})).status_code == 401
 
 
 async def test_roles_and_audit_log(client, admin_headers):
@@ -45,7 +66,7 @@ async def test_roles_and_audit_log(client, admin_headers):
 
     r = await client.post("/admin-api/admins", headers=admin_headers,
                           json={"email": "new@example.com", "password": "long-enough-pw", "role": "viewer"})
-    assert r.status_code == 200 and r.json()["totp_uri"].startswith("otpauth://totp/")
+    assert r.status_code == 200 and r.json()["admin"]["totp_enabled"] is False
     r = await client.put("/admin-api/config", headers=admin_headers, json={"points_per_spin": 300})
     assert r.json()["points_per_spin"] == 300
     assert (await client.put("/admin-api/config", headers=admin_headers, json={"nope": 1})).status_code == 400

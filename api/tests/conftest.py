@@ -110,15 +110,11 @@ async def admin_headers(client):
 
 
 async def admin_login(client, email: str, role: str) -> dict:
-    import pyotp
-
     from app.routes.admin import create_admin
 
     async with SessionLocal() as s:
-        admin, uri = await create_admin(s, email, "correct-horse-battery", role)
+        await create_admin(s, email, "correct-horse-battery", role)
         await s.commit()
-    code = pyotp.parse_uri(uri).now()
-    r = await client.post("/admin-api/auth/login",
-                          json={"email": email, "password": "correct-horse-battery", "totp": code})
+    r = await client.post("/admin-api/auth/login", json={"email": email, "password": "correct-horse-battery"})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['token']}"}
