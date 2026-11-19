@@ -1,0 +1,888 @@
+"use client";
+
+// Contracts page body (plan §3.10). Loaded with next/dynamic so the wallet libraries stay out of other pages.
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { formatUnits, isAddress, parseUnits, type Abi, type Address, type Hex, type PublicClient } from "viem";
+import { api } from "@/lib/api";
+import { formatWei } from "@/lib/format";
+import type { Airdrop, Settings } from "@/lib/types";
+import { Addr, ErrorBox } from "@/components/ui";
+import { airdropAbi, erc20Abi, presaleAbi, tokenAbi } from "./abi";
+import { chainFor, explorerTx, initWallet, makePublicClient, plainError, projectId, sendTx } from "./wallet";
+
+type Key = "token" | "presale" | "airdrop";
+type V = Record<string, unknown>;
+type Values = { now: number; token: V; presale: V; airdrop: V };
+type Tx =
+  | { phase: "idle" }
+  | { phase: "wallet" }
+  | { phase: "pending"; hash: string }
+  | { phase: "confirmed"; hash: string; logError?: string }
+  | { phase: "failed"; reason: string; hash?: string };
+
+const ABIS: Record<Key, Abi> = { token: tokenAbi, presale: presaleAbi, airdrop: airdropAbi };
+const ZERO = "0x0000000000000000000000000000000000000000";
+const ZERO32 = "0x" + "0".repeat(64);
+
+// ---------- conversions ----------
+
+const big = (v: unknown): bigint | undefined => (typeof v === "bigint" ? v : undefined);
+const num = (v: unknown): number => Number(big(v) ?? 0n);
+const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+const same = (a?: string | null, b?: string | null) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+function amount(v: string, label: string): bigint {
+  if (!/^\d+(\.\d{1,18})?$/.test(v.trim())) throw new Error(`${label}: enter a number like 100 or 0.5.`);
+  return parseUnits(v.trim(), 18);
+}
+function percentToBps(v: string, label: string): bigint {
+  const n = Number(v);
+  if (v.trim() === "" || !Number.isFinite(n) || n < 0 || n > 100) throw new Error(`${label}: enter a percent from 0 to 100.`);
+  return BigInt(Math.round(n * 100));
+}
+function address(v: string, label: string): Address {
+  if (!isAddress(v.trim())) throw new Error(`${label}: enter a valid 0x address.`);
+  return v.trim() as Address;
+}
+function datetime(v: string, label: string): bigint {
+  const t = new Date(v).getTime();
+  if (!v || Number.isNaN(t)) throw new Error(`${label}: pick a date and time.`);
+  return BigInt(Math.floor(t / 1000));
+}
+function days(v: string, label: string): bigint {
+  const n = Number(v);
+  if (v.trim() === "" || !Number.isFinite(n) || n < 0) throw new Error(`${label}: enter days ≥ 0.`);
+  return BigInt(Math.round(n * 86400));
+}
+const units = (v: unknown) => (big(v) === undefined ? "" : formatUnits(big(v)!, 18));
+const bpsToPercent = (v: unknown) => (big(v) === undefined ? "" : String(num(v) / 100));
+function toLocalInput(sec: unknown): string {
+  const s = num(sec);
+  if (!s) return "";
+  const d = new Date(s * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function showTime(sec: unknown): ReactNode {
+  const s = num(sec);
+  return s ? new Date(s * 1000).toLocaleString() : <span className="muted">not set</span>;
+}
+function jsonArgs(args: readonly unknown[]): unknown[] {
+  return args.map((a) => (typeof a === "bigint" ? a.toString() : Array.isArray(a) ? jsonArgs(a) : a));
+}
+
+// ---------- reads ----------
+
+async function readAll(client: PublicClient, s: Settings, account?: Address): Promise<Values> {
+  const call = (address: string | null | undefined, abi: Abi, functionName: string, args: unknown[] = []) =>
+    address && isAddress(address)
+      ? client.readContract({ address: address as Address, abi, functionName, args }).catch(() => undefined)
+      : Promise.resolve(undefined);
+  const group = async (address: string | null | undefined, abi: Abi, names: string[]) => {
+    const vals = await Promise.all(names.map((n) => call(address, abi, n)));
+    return Object.fromEntries(names.map((n, i) => [n, vals[i]])) as V;
+  };
+  const own = ["owner", "pendingOwner"];
+  const [block, token, presale, airdrop] = await Promise.all([
+    client.getBlock(),
+    group(s.token_address, tokenAbi, [
+      ...own,
+      ...["name", "symbol", "totalSupply", "treasury", "taxWallet", "buyTaxBps", "sellTaxBps", "socials"],
+    ]),
+    group(s.presale_address, presaleAbi, [
+      ...own,
+      ...["paused", "usdt", "token", "signer", "tokensPerUsdt", "hardCapWei", "minWei", "maxWei", "startTime"],
+      ...["endTime", "totalRaised", "totalTokensSold", "claimEnabled", "claimStart", "unlockBps", "vestingDuration"],
+    ]),
+    group(s.airdrop_address, airdropAbi, [...own, "token", "merkleRoot", "deadline"]),
+  ]);
+  const usdt = str(presale.usdt) || s.usdt_address;
+  const [presaleUsdt, presaleTokens, airdropTokens, myTokens] = await Promise.all([
+    call(usdt, erc20Abi, "balanceOf", [s.presale_address]),
+    call(s.token_address, erc20Abi, "balanceOf", [s.presale_address]),
+    call(s.token_address, erc20Abi, "balanceOf", [s.airdrop_address]),
+    account ? call(s.token_address, erc20Abi, "balanceOf", [account]) : undefined,
+  ]);
+  return {
+    now: Number(block.timestamp),
+    token: { ...token, myBalance: myTokens },
+    presale: { ...presale, usdtBalance: presaleUsdt, tokenBalance: presaleTokens },
+    airdrop: { ...airdrop, tokenBalance: airdropTokens },
+  };
+}
+
+// ---------- context + generic action form ----------
+
+type Ctx = {
+  settings: Settings;
+  values: Values;
+  account?: Address;
+  canEdit: boolean;
+  addresses: Record<Key, string | null>;
+  run: (key: Key, method: string, args: readonly unknown[], setTx: (t: Tx) => void) => Promise<void>;
+};
+const CtxObj = createContext<Ctx | null>(null);
+const useCtx = () => useContext(CtxObj)!;
+
+type Field = {
+  name: string;
+  label: string;
+  type?: "text" | "datetime-local" | "bool";
+  initial?: string;
+  placeholder?: string;
+};
+
+type ActionProps = {
+  title: string;
+  contract: Key;
+  method: string;
+  fields?: Field[];
+  /** Turns the form values into call args; throw Error for invalid input. */
+  build?: (v: Record<string, string>) => readonly unknown[];
+  /** Who may send: the contract owner (default), the pending owner, or any connected wallet. */
+  who?: "owner" | "pending" | "any";
+  /** When set, the form is disabled and this reason is shown. */
+  blocked?: string | false;
+  confirm?: string;
+  hint?: ReactNode;
+  /** Extra controls that can fill fields (e.g. "use backend signer"). */
+  helpers?: (set: (name: string, value: string) => void) => ReactNode;
+  danger?: boolean;
+};
+
+function TxStatus({ tx }: { tx: Tx }) {
+  const { settings } = useCtx();
+  const link = (hash: string) => {
+    const url = explorerTx(Number(settings.chain_id) || 0, hash);
+    return url ? (
+      <a href={url} target="_blank" rel="noreferrer">
+        view on BscScan
+      </a>
+    ) : (
+      <code>{hash}</code>
+    );
+  };
+  if (tx.phase === "idle") return null;
+  if (tx.phase === "wallet") return <div className="notice small">Waiting for wallet confirmation…</div>;
+  if (tx.phase === "pending") return <div className="notice small">Pending… {link(tx.hash)}</div>;
+  if (tx.phase === "confirmed")
+    return (
+      <div className="small">
+        <span className="ok">Confirmed.</span> {link(tx.hash)}
+        {tx.logError && <div className="bad">Audit log failed: {tx.logError}</div>}
+      </div>
+    );
+  return (
+    <div className="error small">
+      Failed: {tx.reason} {tx.hash && link(tx.hash)}
+    </div>
+  );
+}
+
+function Action(props: ActionProps) {
+  const { values, account, canEdit, run } = useCtx();
+  const [tx, setTx] = useState<Tx>({ phase: "idle" });
+  const v = values[props.contract];
+  const who = props.who ?? "owner";
+  const busy = tx.phase === "wallet" || tx.phase === "pending";
+  let reason: string | false | undefined = props.blocked;
+  if (!account) reason = "Connect a wallet.";
+  else if (who === "owner" && !same(account, str(v.owner))) reason = reason || "Connected wallet is not the owner.";
+  else if (who === "pending" && !same(account, str(v.pendingOwner)))
+    reason = reason || "Connected wallet is not the pending owner.";
+
+  const submit = async (vals: Record<string, string>) => {
+    let args: readonly unknown[] = [];
+    try {
+      args = props.build ? props.build(vals) : [];
+    } catch (e) {
+      setTx({ phase: "failed", reason: (e as Error).message });
+      return;
+    }
+    if (props.confirm && !window.confirm(props.confirm)) return;
+    await run(props.contract, props.method, args, setTx);
+  };
+
+  if (!canEdit) return null;
+  // Remount the inputs when the on-chain values they start from change.
+  const initKey = (props.fields ?? []).map((f) => f.initial ?? "").join("|");
+  return (
+    <div className="card stack action">
+      <div>
+        <h3>
+          {props.title} <code className="muted small">{props.method}</code>
+        </h3>
+        {props.hint && <div className="muted small">{props.hint}</div>}
+      </div>
+      <ActionForm
+        key={initKey}
+        fields={props.fields ?? []}
+        disabled={!!reason || busy}
+        danger={props.danger}
+        label={busy ? "Working…" : props.title}
+        helpers={props.helpers}
+        onSubmit={submit}
+      />
+      {reason && <div className="muted small">{reason}</div>}
+      <TxStatus tx={tx} />
+    </div>
+  );
+}
+
+function ActionForm({
+  fields,
+  disabled,
+  danger,
+  label,
+  helpers,
+  onSubmit,
+}: {
+  fields: Field[];
+  disabled: boolean;
+  danger?: boolean;
+  label: string;
+  helpers?: ActionProps["helpers"];
+  onSubmit: (v: Record<string, string>) => void;
+}) {
+  const [vals, setVals] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.map((f) => [f.name, f.initial ?? (f.type === "bool" ? "true" : "")])),
+  );
+  const set = (name: string, value: string) => setVals((s) => ({ ...s, [name]: value }));
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    onSubmit(vals);
+  };
+  return (
+    <form className="inline" onSubmit={submit}>
+      {fields.map((f) => (
+        <label key={f.name} className="field" style={{ flex: f.type === "bool" ? undefined : 1, minWidth: 140 }}>
+          <span>{f.label}</span>
+          {f.type === "bool" ? (
+            <select value={vals[f.name]} onChange={(e) => set(f.name, e.target.value)}>
+              <option value="true">add (true)</option>
+              <option value="false">remove (false)</option>
+            </select>
+          ) : (
+            <input
+              type={f.type === "datetime-local" ? "datetime-local" : "text"}
+              value={vals[f.name]}
+              placeholder={f.placeholder}
+              onChange={(e) => set(f.name, e.target.value)}
+            />
+          )}
+        </label>
+      ))}
+      {helpers?.(set)}
+      <button type="submit" className={danger ? "btn danger" : "btn primary"} disabled={disabled}>
+        {label}
+      </button>
+    </form>
+  );
+}
+
+function KV({ rows }: { rows: [string, ReactNode][] }) {
+  return (
+    <dl className="kv card">
+      {rows.map(([k, v]) => (
+        <div key={k} style={{ display: "contents" }}>
+          <dt>{k}</dt>
+          <dd>{v === undefined || v === null || v === "" ? <span className="muted">—</span> : v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+const A = (v: unknown) => (str(v) && str(v) !== ZERO ? <Addr value={str(v)} full /> : <span className="muted">none</span>);
+const W = (v: unknown) => (big(v) === undefined ? undefined : formatWei(big(v)!.toString()));
+const P = (v: unknown) => (big(v) === undefined ? undefined : `${num(v) / 100}%`);
+const B = (v: unknown) => (typeof v === "boolean" ? (v ? "yes" : "no") : undefined);
+
+// ---------- sections ----------
+
+function Ownership({ contract }: { contract: Key }) {
+  return (
+    <>
+      <Action
+        title="Transfer ownership"
+        contract={contract}
+        method="transferOwnership"
+        fields={[{ name: "to", label: "New owner address", placeholder: "0x…" }]}
+        build={(v) => [address(v.to, "New owner")]}
+        confirm="Start ownership transfer? The new owner must then accept it."
+        hint="Step 1 of 2. The new owner then connects and presses Accept ownership."
+        danger
+      />
+      <Action
+        title="Accept ownership"
+        contract={contract}
+        method="acceptOwnership"
+        who="pending"
+        hint="Step 2 of 2, signed by the pending owner."
+      />
+    </>
+  );
+}
+
+function TokenSection() {
+  const { values, addresses } = useCtx();
+  const t = values.token;
+  const [check, setCheck] = useState("");
+  const [checked, setChecked] = useState<string | null>(null);
+  const client = useClient();
+
+  const lookup = async () => {
+    if (!isAddress(check.trim())) return setChecked("Enter a valid address.");
+    const a = addresses.token as Address;
+    const args = [check.trim() as Address] as const;
+    try {
+      const [ex, pair] = await Promise.all([
+        client.readContract({ address: a, abi: tokenAbi, functionName: "isTaxExempt", args }),
+        client.readContract({ address: a, abi: tokenAbi, functionName: "isAmmPair", args }),
+      ]);
+      setChecked(`tax exempt: ${ex ? "yes" : "no"} · AMM pair: ${pair ? "yes" : "no"}`);
+    } catch (e) {
+      setChecked(plainError(e));
+    }
+  };
+
+  return (
+    <>
+      <KV
+        rows={[
+          ["Address", A(addresses.token)],
+          ["Name / symbol", t.name !== undefined ? `${str(t.name)} / ${str(t.symbol)}` : undefined],
+          ["Total supply", W(t.totalSupply)],
+          ["Owner", A(t.owner)],
+          ["Pending owner", A(t.pendingOwner)],
+          ["Treasury", A(t.treasury)],
+          ["Tax wallet", A(t.taxWallet)],
+          ["Buy tax", P(t.buyTaxBps)],
+          ["Sell tax", P(t.sellTaxBps)],
+          ["Socials", str(t.socials)],
+          ["Balance of presale", W(values.presale.tokenBalance)],
+          ["Balance of airdrop", W(values.airdrop.tokenBalance)],
+          ["Balance of connected wallet", W(t.myBalance)],
+        ]}
+      />
+      <div className="card inline-check row">
+        <label className="field" style={{ flex: 1, minWidth: 260 }}>
+          <span>Check tax-exempt / AMM pair status of an address</span>
+          <input value={check} onChange={(e) => setCheck(e.target.value)} placeholder="0x…" />
+        </label>
+        <button type="button" className="btn" onClick={lookup} style={{ alignSelf: "flex-end" }}>
+          Check
+        </button>
+        {checked && <span className="small">{checked}</span>}
+      </div>
+      <div className="actions">
+        <Action
+          title="Set buy tax"
+          contract="token"
+          method="setBuyTax"
+          fields={[{ name: "p", label: "Buy tax %", initial: bpsToPercent(t.buyTaxBps) }]}
+          build={(v) => [percentToBps(v.p, "Buy tax")]}
+          hint="Applied on buys from AMM pairs. No cap other than 100%."
+        />
+        <Action
+          title="Set sell tax"
+          contract="token"
+          method="setSellTax"
+          fields={[{ name: "p", label: "Sell tax %", initial: bpsToPercent(t.sellTaxBps) }]}
+          build={(v) => [percentToBps(v.p, "Sell tax")]}
+          hint="Applied on sells to AMM pairs. No cap other than 100%."
+        />
+        <Action
+          title="Set tax wallet"
+          contract="token"
+          method="setTaxWallet"
+          fields={[{ name: "a", label: "Tax wallet", initial: str(t.taxWallet) }]}
+          build={(v) => [address(v.a, "Tax wallet")]}
+        />
+        <Action
+          title="Set socials"
+          contract="token"
+          method="setSocials"
+          fields={[{ name: "s", label: "Socials text", initial: str(t.socials) }]}
+          build={(v) => [v.s]}
+        />
+        <Action
+          title="Tax exempt"
+          contract="token"
+          method="setTaxExempt"
+          fields={[
+            { name: "a", label: "Address", placeholder: "0x…" },
+            { name: "b", label: "Action", type: "bool" },
+          ]}
+          build={(v) => [address(v.a, "Address"), v.b === "true"]}
+        />
+        <Action
+          title="AMM pair"
+          contract="token"
+          method="setAmmPair"
+          fields={[
+            { name: "a", label: "Pair address", placeholder: "0x…" },
+            { name: "b", label: "Action", type: "bool" },
+          ]}
+          build={(v) => [address(v.a, "Pair"), v.b === "true"]}
+          hint="Register the PancakeSwap pair so buy/sell tax applies."
+        />
+        <Action
+          title="Fund presale"
+          contract="token"
+          method="transfer"
+          who="any"
+          blocked={!addresses.presale && "Presale address is not set in Settings."}
+          fields={[{ name: "n", label: "Tokens", placeholder: "1000000" }]}
+          build={(v) => [addresses.presale as Address, amount(v.n, "Tokens")]}
+          hint="Token transfer from the connected wallet to the presale contract."
+        />
+        <Action
+          title="Fund airdrop"
+          contract="token"
+          method="transfer"
+          who="any"
+          blocked={!addresses.airdrop && "Airdrop address is not set in Settings."}
+          fields={[{ name: "n", label: "Tokens", placeholder: "1000000" }]}
+          build={(v) => [addresses.airdrop as Address, amount(v.n, "Tokens")]}
+          hint="Token transfer from the connected wallet to the airdrop contract."
+        />
+        <Ownership contract="token" />
+      </div>
+    </>
+  );
+}
+
+function PresaleSection() {
+  const { values, settings, addresses } = useCtx();
+  const p = values.presale;
+  const now = values.now;
+  const start = num(p.startTime);
+  const end = num(p.endTime);
+  const paused = p.paused === true;
+  const editable = start === 0 || now < start || paused;
+  const claimEnabled = p.claimEnabled === true;
+  const tokenSet = !!str(p.token) && str(p.token) !== ZERO;
+  const status = paused
+    ? "paused"
+    : start === 0 || now < start
+      ? "not started"
+      : now < end
+        ? "live"
+        : "ended";
+  const notEditable = !editable && "Not editable: the presale is live or ended and not paused. Pause it first.";
+  const price = big(p.tokensPerUsdt);
+  const signer = str(p.signer);
+
+  return (
+    <>
+      <KV
+        rows={[
+          ["Address", A(addresses.presale)],
+          ["Status", <span key="s" className={`badge${status === "live" ? " green" : status === "paused" ? " red" : ""}`}>{status}</span>],
+          ["Owner", A(p.owner)],
+          ["Pending owner", A(p.pendingOwner)],
+          ["USDT", A(p.usdt)],
+          ["Token", A(p.token)],
+          [
+            "Signer",
+            <span key="sg" className="row">
+              {A(signer)}
+              {signer && settings.signer_address && (
+                <span className={`badge ${same(signer, settings.signer_address) ? "green" : "red"}`}>
+                  {same(signer, settings.signer_address) ? "matches backend" : "differs from backend"}
+                </span>
+              )}
+            </span>,
+          ],
+          [
+            "Price",
+            price
+              ? `${formatWei(price.toString())} tokens per 1 USDT ($${(1 / Number(formatUnits(price, 18))).toPrecision(4)} per token)`
+              : "not set",
+          ],
+          ["Hard cap", W(p.hardCapWei) && `${W(p.hardCapWei)} USDT`],
+          ["Per-wallet min / max", W(p.minWei) && `${W(p.minWei)} / ${W(p.maxWei)} USDT`],
+          ["Start", showTime(p.startTime)],
+          ["End", showTime(p.endTime)],
+          ["Total raised", W(p.totalRaised) && `${W(p.totalRaised)} USDT`],
+          ["Tokens sold", W(p.totalTokensSold)],
+          ["USDT balance", W(p.usdtBalance)],
+          ["Token balance", W(p.tokenBalance)],
+          ["Claim enabled", B(p.claimEnabled)],
+          ["Claim start", showTime(p.claimStart)],
+          ["Initial unlock", P(p.unlockBps)],
+          ["Vesting", big(p.vestingDuration) !== undefined ? `${num(p.vestingDuration) / 86400} days` : undefined],
+        ]}
+      />
+      <div className="notice small">
+        Price, hard cap and per-wallet limits can be changed only while the presale is not started or is paused (
+        {editable ? "editable now" : "not editable now"}). Unlock settings lock once claim is enabled.
+      </div>
+      <div className="actions">
+        <Action
+          title={paused ? "Unpause" : "Pause"}
+          contract="presale"
+          method={paused ? "unpause" : "pause"}
+          danger={!paused}
+          hint={paused ? "Reopens buying (within start/end)." : "Stops buying immediately. Claims still work."}
+        />
+        <Action
+          title="Set price"
+          contract="presale"
+          method="setPrice"
+          blocked={notEditable}
+          fields={[{ name: "n", label: "Tokens per 1 USDT", initial: units(p.tokensPerUsdt), placeholder: "100" }]}
+          build={(v) => [amount(v.n, "Price")]}
+          hint="Example: $0.01 per token = 100 tokens per USDT. Existing buyers keep their price."
+        />
+        <Action
+          title="Set hard cap"
+          contract="presale"
+          method="setHardCap"
+          blocked={notEditable}
+          fields={[{ name: "n", label: "Hard cap (USDT)", initial: units(p.hardCapWei) }]}
+          build={(v) => [amount(v.n, "Hard cap")]}
+          hint="Must be ≥ total raised."
+        />
+        <Action
+          title="Set limits"
+          contract="presale"
+          method="setLimits"
+          blocked={notEditable}
+          fields={[
+            { name: "min", label: "Min per wallet (USDT)", initial: units(p.minWei) },
+            { name: "max", label: "Max per wallet (USDT)", initial: units(p.maxWei) },
+          ]}
+          build={(v) => [amount(v.min, "Min"), amount(v.max, "Max")]}
+        />
+        <Action
+          title="Set times"
+          contract="presale"
+          method="setTimes"
+          fields={[
+            { name: "s", label: "Start (your local time)", type: "datetime-local", initial: toLocalInput(p.startTime) },
+            { name: "e", label: "End (your local time)", type: "datetime-local", initial: toLocalInput(p.endTime) },
+          ]}
+          build={(v) => [datetime(v.s, "Start"), datetime(v.e, "End")]}
+        />
+        <Action
+          title="Set signer"
+          contract="presale"
+          method="setSigner"
+          fields={[{ name: "a", label: "Signer address", initial: signer && signer !== ZERO ? signer : "" }]}
+          build={(v) => [address(v.a, "Signer")]}
+          hint="Must be the backend signer, or whitelist signatures fail."
+          helpers={(set) => (
+            <button
+              type="button"
+              className="btn"
+              disabled={!settings.signer_address}
+              onClick={() => set("a", settings.signer_address ?? "")}
+            >
+              Use backend signer
+            </button>
+          )}
+        />
+        <Action
+          title="Set token"
+          contract="presale"
+          method="setToken"
+          blocked={tokenSet && "Token is already set (once only)."}
+          fields={[{ name: "a", label: "Token address", initial: addresses.token ?? "" }]}
+          build={(v) => [address(v.a, "Token")]}
+          confirm="Set the token address? This can be done only once."
+          hint="Once only."
+        />
+        <Action
+          title="Set unlock"
+          contract="presale"
+          method="setUnlock"
+          blocked={claimEnabled && "Locked: claim is already enabled."}
+          fields={[
+            { name: "p", label: "Initial unlock %", initial: bpsToPercent(p.unlockBps) },
+            {
+              name: "d",
+              label: "Vesting duration (days)",
+              initial: big(p.vestingDuration) !== undefined ? String(num(p.vestingDuration) / 86400) : "",
+            },
+          ]}
+          build={(v) => [percentToBps(v.p, "Unlock"), days(v.d, "Vesting")]}
+          hint="100% and 0 days = full unlock at claim start."
+        />
+        <Action
+          title="Enable claim"
+          contract="presale"
+          method="enableClaim"
+          blocked={(claimEnabled && "Claim is already enabled.") || (!tokenSet && "Set the token first.")}
+          confirm="Enable claiming now? This is irreversible and locks the unlock settings. Make sure the presale holds enough tokens."
+          hint="Irreversible. Fund the presale with tokens first."
+          danger
+        />
+        <Action
+          title="Withdraw USDT"
+          contract="presale"
+          method="withdrawUsdt"
+          fields={[{ name: "to", label: "To address", placeholder: "0x…" }]}
+          build={(v) => [address(v.to, "To")]}
+          confirm="Withdraw the whole USDT balance of the presale?"
+          hint="Sends the whole USDT balance."
+          danger
+        />
+        <Action
+          title="Withdraw tokens"
+          contract="presale"
+          method="withdrawTokens"
+          blocked={!tokenSet && "Token is not set."}
+          fields={[
+            { name: "to", label: "To address", placeholder: "0x…" },
+            { name: "n", label: "Tokens" },
+          ]}
+          build={(v) => [address(v.to, "To"), amount(v.n, "Tokens")]}
+          confirm="Withdraw tokens from the presale?"
+          danger
+        />
+        <Ownership contract="presale" />
+      </div>
+    </>
+  );
+}
+
+function AirdropSection({ airdrops, initialRoot }: { airdrops: Airdrop[]; initialRoot: string }) {
+  const { values, addresses } = useCtx();
+  const a = values.airdrop;
+  const root = str(a.merkleRoot);
+  const current = airdrops.find((d) => same(d.merkle_root, root));
+  const deadline = num(a.deadline);
+  const canRecover = deadline !== 0 && values.now > deadline;
+
+  return (
+    <>
+      <KV
+        rows={[
+          ["Address", A(addresses.airdrop)],
+          ["Owner", A(a.owner)],
+          ["Pending owner", A(a.pendingOwner)],
+          ["Token", A(a.token)],
+          [
+            "Merkle root",
+            root && root !== ZERO32 ? (
+              <span key="r" className="row">
+                <Addr value={root} full />
+                {current && <span className="badge green">airdrop #{current.id}</span>}
+              </span>
+            ) : (
+              <span className="muted">not set</span>
+            ),
+          ],
+          ["Claim deadline", showTime(a.deadline)],
+          ["Token balance", W(a.tokenBalance)],
+          ["Needed for current root", current ? formatWei(current.total_amount_wei) : undefined],
+        ]}
+      />
+      <div className="actions">
+        <Action
+          title="Set root"
+          contract="airdrop"
+          method="setRoot"
+          fields={[{ name: "r", label: "Merkle root", initial: initialRoot, placeholder: "0x…" }]}
+          build={(v) => {
+            if (!/^0x[0-9a-fA-F]{64}$/.test(v.r.trim())) throw new Error("Merkle root: enter a 0x + 64 hex value.");
+            return [v.r.trim() as Hex];
+          }}
+          confirm="Set this Merkle root? Users will claim against it."
+          hint="Pick a built airdrop or paste a root. Then fund the airdrop with enough tokens (Token tab)."
+          helpers={(set) => (
+            <label className="field">
+              <span>Built airdrop</span>
+              <select defaultValue="" onChange={(e) => set("r", e.target.value)}>
+                <option value="">choose…</option>
+                {airdrops.map((d) => (
+                  <option key={d.id} value={d.merkle_root}>
+                    #{d.id} · {formatWei(d.total_amount_wei)} tokens · {d.recipients} recipients
+                    {d.active ? " · active" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        />
+        <Action
+          title="Set deadline"
+          contract="airdrop"
+          method="setDeadline"
+          fields={[{ name: "d", label: "Deadline (your local time)", type: "datetime-local", initial: toLocalInput(a.deadline) }]}
+          build={(v) => [datetime(v.d, "Deadline")]}
+          hint="After the deadline claims stop and the owner can recover the rest."
+        />
+        <Action
+          title="Recover"
+          contract="airdrop"
+          method="recover"
+          blocked={!canRecover && "Available only after the claim deadline has passed."}
+          fields={[{ name: "to", label: "To address", placeholder: "0x…" }]}
+          build={(v) => [address(v.to, "To")]}
+          confirm="Send the whole remaining token balance of the airdrop contract?"
+          danger
+        />
+        <Ownership contract="airdrop" />
+      </div>
+    </>
+  );
+}
+
+// ---------- page body ----------
+
+const ClientCtx = createContext<PublicClient | null>(null);
+const useClient = () => useContext(ClientCtx)!;
+
+export default function ContractsAdmin({
+  settings,
+  airdrops,
+  canEdit,
+}: {
+  settings: Settings;
+  airdrops: Airdrop[];
+  canEdit: boolean;
+}) {
+  const chainId = Number(settings.chain_id) || 0;
+  const rpc = settings.rpc_url ?? "";
+  const chain = useMemo(() => chainFor(chainId, rpc), [chainId, rpc]);
+  const client = useMemo(() => makePublicClient(chain), [chain]);
+  const addresses: Record<Key, string | null> = useMemo(
+    () => ({
+      token: settings.token_address || null,
+      presale: settings.presale_address || null,
+      airdrop: settings.airdrop_address || null,
+    }),
+    [settings],
+  );
+  const [initialRoot] = useState(() => new URLSearchParams(window.location.search).get("root") ?? "");
+  const [tab, setTab] = useState<Key>(initialRoot ? "airdrop" : "presale");
+  const [account, setAccount] = useState<Address | undefined>();
+  const [values, setValues] = useState<Values | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [kit] = useState(() => (canEdit ? initWallet(chain) : null));
+
+  useEffect(() => {
+    if (!kit) return;
+    return kit.subscribeAccount((s) => setAccount(s.isConnected && s.address ? (s.address as Address) : undefined));
+  }, [kit]);
+
+  const refresh = useCallback(() => {
+    readAll(client, settings, account).then(
+      (v) => {
+        setValues(v);
+        setReadError(null);
+      },
+      (e) => setReadError(`Could not read the chain: ${plainError(e)}`),
+    );
+  }, [client, settings, account]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const run = useCallback<Ctx["run"]>(
+    async (key, method, args, setTx) => {
+      const address = addresses[key];
+      if (!account || !address) return;
+      setTx({ phase: "wallet" });
+      let hash: Hex | undefined;
+      try {
+        hash = await sendTx(client, account, address as Address, ABIS[key], method, args);
+        setTx({ phase: "pending", hash });
+        const r = await client.waitForTransactionReceipt({ hash });
+        if (r.status !== "success") {
+          setTx({ phase: "failed", hash, reason: "The transaction reverted on chain." });
+          return;
+        }
+      } catch (e) {
+        setTx({ phase: "failed", hash, reason: plainError(e) });
+        return;
+      }
+      let logError: string | undefined;
+      try {
+        await api("/contracts/log", { method: "POST", body: { contract: key, method, args: jsonArgs(args), tx_hash: hash } });
+      } catch (e) {
+        logError = (e as Error).message;
+      }
+      setTx({ phase: "confirmed", hash, logError });
+      refresh();
+    },
+    [account, addresses, client, refresh],
+  );
+
+  if (!chainId || !rpc) return <div className="notice">Set the chain id and RPC URL on the Settings page first.</div>;
+
+  const ownerOf = (k: Key) => str(values?.[k].owner);
+
+  return (
+    <ClientCtx.Provider value={client}>
+      {canEdit && (
+        <div className="card row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
+          {kit ? (
+            <>
+              <div className="stack" style={{ gap: 4 }}>
+                <div>
+                  Wallet: {account ? <Addr value={account} full /> : <span className="muted">not connected</span>}
+                </div>
+                {account && (
+                  <div className="row small">
+                    {(["token", "presale", "airdrop"] as Key[]).map((k) => (
+                      <span key={k} className={`badge ${same(account, ownerOf(k)) ? "green" : "red"}`}>
+                        {k}: {same(account, ownerOf(k)) ? "owner" : "not owner"}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="row">
+                <button type="button" className="btn primary" onClick={() => kit.open()}>
+                  {account ? "Wallet" : "Connect wallet"}
+                </button>
+                {account && (
+                  <button type="button" className="btn ghost" onClick={() => kit.disconnect()}>
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <span className="muted">
+              {projectId ? "Wallet unavailable." : "Wallet connect is not configured (NEXT_PUBLIC_REOWN_PROJECT_ID)."}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="row muted small" style={{ marginBottom: 10 }}>
+        Chain {chainId} · {rpc}
+        <button type="button" className="btn small" onClick={refresh}>
+          Refresh
+        </button>
+      </div>
+      <ErrorBox error={readError} />
+      <div className="tabs">
+        {(["presale", "token", "airdrop"] as Key[]).map((k) => (
+          <button key={k} type="button" className={`tab${tab === k ? " active" : ""}`} onClick={() => setTab(k)}>
+            {k[0].toUpperCase() + k.slice(1)}
+          </button>
+        ))}
+      </div>
+      {!addresses[tab] ? (
+        <div className="notice">The {tab} address is not set. Add it on the Settings page.</div>
+      ) : !values ? (
+        <p className="muted">Reading chain…</p>
+      ) : (
+        <CtxObj.Provider value={{ settings, values, account, canEdit, addresses, run }}>
+          <div className="stack">
+            {tab === "token" && <TokenSection />}
+            {tab === "presale" && <PresaleSection />}
+            {tab === "airdrop" && <AirdropSection airdrops={airdrops} initialRoot={initialRoot} />}
+          </div>
+        </CtxObj.Provider>
+      )}
+    </ClientCtx.Provider>
+  );
+}

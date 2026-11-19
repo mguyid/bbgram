@@ -1,0 +1,34 @@
+{
+  "eip712": {
+    "chain_id": 97,
+    "digest": "0xa16b357c870e2bb0138b11c76a5cc442e3240f2647b6d269b18700250920c89b",
+    "domain_name": "BabyGrandPresale",
+    "domain_separator": "0x3f4ac228c413f9d56d27efca0bbcf11b750fff97ea705181c276cea8b7f3a62c",
+    "domain_version": "1",
+    "max_allocation_wei": "2500000000000000000000",
+    "signature": "0x951591c6829c7ab5a14a122973588ce96176dc1fff38864fee3615fbfd8008372f8265015d79356cfadd924dc74ecd998a72d3cc69388a1e8bff047eabc2a9711c",
+    "signer_address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "signer_private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    "struct_hash": "0x588d8f2f96ca6c84b97464024660d7adf90ac02e96a1d9c1031e6122a54840ea",
+    "type": "Whitelist(address wallet,uint256 maxAllocation)",
+    "verifying_contract": "0x3333333333333333333333333333333333333333",
+    "wallet": "0x1111111111111111111111111111111111111111"
+  },
+  "merkle": {
+    "account_a": "0x1111111111111111111111111111111111111111",
+    "account_b": "0x2222222222222222222222222222222222222222",
+    "amount_a_wei": "100000000000000000000",
+    "amount_b_wei": "200000000000000000000",
+    "leaf_a": "0x923a571f712ff2d205bc7da76152ab30459ae47d04647ff145ba9ad746468fc6",
+    "leaf_b": "0x2769202b8c373ddf6a1c9e7e5f6bd2a3afb327e36f8214802c6820e2dde14f6b",
+    "leaf_encoding": "keccak256(bytes.concat(keccak256(abi.encode(address,uint256))))",
+    "pair_hashing": "keccak256(abi.encodePacked(min(a,b), max(a,b)))",
+    "proof_a": [
+      "0x2769202b8c373ddf6a1c9e7e5f6bd2a3afb327e36f8214802c6820e2dde14f6b"
+    ],
+    "proof_b": [
+      "0x923a571f712ff2d205bc7da76152ab30459ae47d04647ff145ba9ad746468fc6"
+    ],
+    "root": "0x7e25c5ca3fff607b23aedc621186d516177aaa27d28fab2dcb329bf099b006f4"
+  }
+}

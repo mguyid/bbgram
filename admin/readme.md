@@ -1,0 +1,39 @@
+this is the admin of the dashboard
+
+# software stack
+python fastapi, postgress, reactjs or nextjs
+
+# deploy
+use docker compose to deploy on coolify.
+
+# run
+
+Next.js (App Router) admin dashboard for the `/admin-api` endpoints in `docs/interfaces.md` §2 and §2a.
+
+Env (build time):
+- `NEXT_PUBLIC_API_URL` — API base URL, e.g. `http://localhost:8000`.
+- `NEXT_PUBLIC_REOWN_PROJECT_ID` — Reown (WalletConnect) project id for the owner wallet on the Contracts page.
+
+```sh
+npm install
+NEXT_PUBLIC_API_URL=http://localhost:8000 NEXT_PUBLIC_REOWN_PROJECT_ID=xxx npm run dev    # http://localhost:3001
+npm run lint && npx tsc --noEmit
+NEXT_PUBLIC_API_URL=https://api.example.com NEXT_PUBLIC_REOWN_PROJECT_ID=xxx npm run build && npm start   # port 3001
+```
+
+Docker (used by the root `docker-compose.yml`):
+
+```sh
+docker build --build-arg NEXT_PUBLIC_API_URL=https://api.example.com \
+  --build-arg NEXT_PUBLIC_REOWN_PROJECT_ID=xxx -t baby-grand-admin .
+docker run -p 3001:3001 baby-grand-admin
+```
+
+Pages of note:
+- **Settings** — Telegram bot, X app, chain id / RPC, contract addresses and the presale signer (`/admin-api/settings`). Owner edits; others read.
+- **Contracts** — current on-chain values of Token, Presale and Airdrop, and a form for every owner setter, signed with the
+  connected owner wallet (Reown AppKit). Chain and addresses come from Settings. Each confirmed tx is written to the audit log.
+  `/contracts?root=0x…` preselects a Merkle root (linked from a built airdrop).
+
+Sign in with an admin created by `python -m app.cli create-admin <email> <password> owner` (api). The JWT is kept in
+sessionStorage; any 401 sends you back to the login page. `viewer` admins see everything read-only.
