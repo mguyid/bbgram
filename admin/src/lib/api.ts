@@ -34,8 +34,7 @@ export function setStoredAdmin(admin: Admin) {
 }
 
 export function logout() {
-  sessionStorage.removeItem(TOKEN_KEY);
-  sessionStorage.removeItem(ADMIN_KEY);
+  clearSession();
   window.location.replace("/login");
 }
 
@@ -76,6 +75,34 @@ export async function api<T = unknown>(
   }
   if (!res.ok) throw new Error(errorMessage(body, res.status));
   return body as T;
+}
+
+/** Raw fetch with the auth header (downloads, multipart uploads). Throws the server's message on error. */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = getToken();
+  const res = await fetch(BASE + path, {
+    ...init,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (res.status === 401) {
+    logout();
+    throw new Error("Session expired");
+  }
+  if (!res.ok) {
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    throw new Error(errorMessage(body, res.status));
+  }
+  return res;
+}
+
+export function clearSession() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(ADMIN_KEY);
 }
 
 /** GET a path and keep the result in state. Pass null to skip. */

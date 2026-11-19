@@ -34,6 +34,10 @@ Pages of note:
 - **Contracts** — current on-chain values of Token, Presale and Airdrop, and a form for every owner setter, signed with the
   connected owner wallet (Reown AppKit). Chain and addresses come from Settings. Each confirmed tx is written to the audit log.
   `/contracts?root=0x…` preselects a Merkle root (linked from a built airdrop).
+- **Backup** (owner only) — download the whole database as a `.jsonl.gz` file, or restore one (type `RESTORE` to
+  confirm). A restore replaces all data, needs the same app version (migration) as the backup and signs you out.
+  Encrypted settings only work with the same `JWT_SECRET`. Backup files hold password hashes, 2FA secrets and encrypted
+  keys: store them somewhere safe.
 
 Sign in with an admin created by `python -m app.cli create-admin <email> <password> owner` (api). The JWT is kept in
 sessionStorage; any 401 sends you back to the login page. `viewer` admins see everything read-only.

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  Archive,
   Camera,
   FileCode,
   FileClock,
@@ -31,6 +32,7 @@ const NAV = [
   { href: "/contracts", label: "Contracts", icon: FileCode },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/admins", label: "Admins", icon: ShieldCheck, ownerOnly: true },
+  { href: "/backup", label: "Backup", icon: Archive, ownerOnly: true },
   { href: "/audit", label: "Audit log", icon: FileClock },
 ];
 

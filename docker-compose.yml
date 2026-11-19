@@ -1,15 +1,22 @@
+# Deployed with Coolify. Coolify fills every ${SERVICE_*} value itself:
+#   SERVICE_URL_<NAME>_<PORT>  public URL of a service (from the domain set in Coolify → Domains),
+#                              and the container port its proxy routes to
+#   SERVICE_USER_* / SERVICE_PASSWORD_64_*  random credentials, generated once and kept across redeploys
+# The only values to set by hand in Coolify are NEXT_PUBLIC_REOWN_PROJECT_ID (and DEV_MODE if ever needed).
+# No `ports:` — Coolify's proxy routes traffic by domain.
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${SERVICE_USER_POSTGRES}
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_64_POSTGRES}
+      POSTGRES_DB: babygrand
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d babygrand"]
       interval: 5s
       retries: 10
 
@@ -24,10 +31,17 @@ services:
   api:
     build: ./api
     restart: unless-stopped
-    env_file: .env
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
-    ports:
-      - "8000:8000"
+    environment:
+      SERVICE_URL_API_8000: /
+      DATABASE_URL: postgresql+asyncpg://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_64_POSTGRES}@postgres:5432/babygrand
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
+      DEV_MODE: ${DEV_MODE:-false}
+      API_PUBLIC_URL: ${SERVICE_URL_API_8000}
+      MINIAPP_URL: ${SERVICE_URL_MINIAPP_3000}
+      ADMIN_URL: ${SERVICE_URL_ADMIN_3001}
+      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000},${SERVICE_URL_ADMIN_3001}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -35,8 +49,16 @@ services:
   worker:
     build: ./api
     restart: unless-stopped
-    env_file: .env
     command: python -m app.worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_64_POSTGRES}@postgres:5432/babygrand
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
+      DEV_MODE: ${DEV_MODE:-false}
+      API_PUBLIC_URL: ${SERVICE_URL_API_8000}
+      MINIAPP_URL: ${SERVICE_URL_MINIAPP_3000}
+      ADMIN_URL: ${SERVICE_URL_ADMIN_3001}
+      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000},${SERVICE_URL_ADMIN_3001}
     depends_on:
       api: { condition: service_started }
 
@@ -44,21 +66,21 @@ services:
     build:
       context: ./miniapp
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_API_URL: ${SERVICE_URL_API_8000}
         NEXT_PUBLIC_REOWN_PROJECT_ID: ${NEXT_PUBLIC_REOWN_PROJECT_ID}
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    environment:
+      SERVICE_URL_MINIAPP_3000: /
 
   admin:
     build:
       context: ./admin
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_API_URL: ${SERVICE_URL_API_8000}
         NEXT_PUBLIC_REOWN_PROJECT_ID: ${NEXT_PUBLIC_REOWN_PROJECT_ID}
     restart: unless-stopped
-    ports:
-      - "3001:3001"
+    environment:
+      SERVICE_URL_ADMIN_3001: /
 
 volumes:
   pgdata:

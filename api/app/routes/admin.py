@@ -4,12 +4,13 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from eth_utils import is_address, to_checksum_address
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import chain, jobs, runtime, telegram
+from app import backup, chain, jobs, runtime, telegram
 from app.config_store import get_config, set_config, validate_value
 from app.db import get_session
 from app.deps import current_admin, ip_rate_limit, owner_admin, writer_admin
@@ -747,3 +748,40 @@ async def audit_log(page: int = Query(1), page_size: int = Query(50), admin: Adm
         {"id": r.id, "admin_id": r.admin_id, "admin_email": r.admin_email, "action": r.action,
          "target": r.target, "details": r.details, "created_at": r.created_at} for r in rows
     ], "total": total, "page": max(page, 1), "page_size": limit}
+
+
+# ---------- backup ----------
+
+MAX_BACKUP_BYTES = 2 * 1024**3
+
+
+@router.get("/backup/export")
+async def backup_export(admin: Admin = Depends(owner_admin), session: AsyncSession = Depends(get_session)):
+    now = datetime.now(UTC)
+    name = backup.backup_filename(now)
+    await audit(session, admin, "backup.export", name)
+    await session.commit()
+    return StreamingResponse(backup.export_stream(now), media_type="application/gzip",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.post("/backup/import")
+async def backup_import(file: UploadFile = File(...), confirm: str = Form(""), admin: Admin = Depends(owner_admin),
+                        session: AsyncSession = Depends(get_session)):
+    if confirm != "RESTORE":
+        raise HTTPException(400, 'Type RESTORE to confirm.')
+    if file.size is not None and file.size > MAX_BACKUP_BYTES:
+        raise HTTPException(413, "Backup file is larger than 2 GB.")
+    email = admin.email
+    await session.rollback()  # release this request's locks before TRUNCATE
+    try:
+        header, counts = await backup.restore(file.file)  # Starlette spools uploads to a temp file
+    except backup.RestoreError as e:
+        raise HTTPException(400, str(e)) from e
+    runtime.invalidate()
+    await redis.delete(jobs.INDEXER_KEY)  # re-scan presale logs from the restored start block
+    restored = (await session.execute(select(Admin).where(Admin.email == email))).scalar_one_or_none()
+    session.add(AdminAuditLog(admin_id=restored.id if restored else None, admin_email=email, action="backup.import",
+                              target=str(header.get("created_at")), details={"tables": counts}))
+    await session.commit()
+    return {"ok": True, "tables": counts, "created_at": header.get("created_at")}
