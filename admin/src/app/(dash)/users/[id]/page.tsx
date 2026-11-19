@@ -6,7 +6,8 @@ import { useParams } from "next/navigation";
 import { api, useGet } from "@/lib/api";
 import { useCanEdit } from "@/lib/auth";
 import { formatDate, formatNumber } from "@/lib/format";
-import { Addr, ConfirmButton, ErrorBox, ObjTable } from "@/components/ui";
+import { Ban, ShieldAlert, ShieldCheck, UserCheck } from "lucide-react";
+import { Addr, ConfirmButton, ErrorBox, Loading, ObjTable, PageHeader, RiskBadge, SuccessBox } from "@/components/ui";
 import type { UserRow } from "@/lib/types";
 
 type Referrer = { id: number; username?: string | null; telegram_id?: number };
@@ -53,22 +54,29 @@ export default function UserDetailPage() {
   };
 
   if (error && !u) return <ErrorBox error={error} />;
-  if (!u) return <p className="muted">Loading…</p>;
+  if (!u) return <Loading />;
 
   return (
     <>
-      <p className="small">
-        <Link href="/users">← Users</Link>
-      </p>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>
-          {u.username ? `@${u.username}` : `User ${u.id}`}{" "}
-          {u.banned && <span className="badge red">banned</span>}
-        </h1>
-        {canEdit &&
+      <PageHeader
+        back={{ href: "/users", label: "Users" }}
+        title={u.username ? `@${u.username}` : `User ${u.id}`}
+        badge={u.banned ? <span className="badge red">Banned</span> : <span className="badge green">Active</span>}
+        description={
+          <>
+            {u.first_name ? `${u.first_name} · ` : ""}Telegram {u.telegram_id} · joined {formatDate(u.created_at)}
+          </>
+        }
+        actions={
+          canEdit &&
           (u.banned ? (
             <ConfirmButton
-              label="Unban"
+              label={
+                <>
+                  <UserCheck size={16} /> Unban
+                </>
+              }
+              className="btn"
               title="Unban this user?"
               message="The user can earn points again and appears on the leaderboard."
               confirmLabel="Unban"
@@ -80,7 +88,11 @@ export default function UserDetailPage() {
             />
           ) : (
             <ConfirmButton
-              label="Ban"
+              label={
+                <>
+                  <Ban size={16} /> Ban user
+                </>
+              }
               title="Ban this user?"
               message="Freezes earning and hides the user from the leaderboard."
               confirmLabel="Ban"
@@ -90,12 +102,16 @@ export default function UserDetailPage() {
                 reload();
               }}
             />
-          ))}
-      </div>
+          ))
+        }
+      />
       <ErrorBox error={error} />
 
-      <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+      <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", alignItems: "start" }}>
         <div className="card">
+          <div className="card-head">
+            <h3>Profile</h3>
+          </div>
           <dl className="kv">
             <dt>ID</dt>
             <dd>{u.id}</dd>
@@ -109,14 +125,14 @@ export default function UserDetailPage() {
             )}
             <dt>Balance</dt>
             <dd>
-              <strong>{formatNumber(u.balance)}</strong> points
+              <strong>{formatNumber(u.balance)}</strong> <span className="muted">points</span>
             </dd>
             <dt>Wallet</dt>
             <dd>
               <Addr value={u.wallet_address} />
             </dd>
             <dt>X</dt>
-            <dd>{u.x_username ? `@${u.x_username}` : "—"}</dd>
+            <dd>{u.x_username ? `@${u.x_username}` : <span className="faint">—</span>}</dd>
             <dt>Referrer</dt>
             <dd>
               {u.referrer ? (
@@ -124,7 +140,7 @@ export default function UserDetailPage() {
                   {u.referrer.username ? `@${u.referrer.username}` : `User ${u.referrer.id}`}
                 </Link>
               ) : (
-                "—"
+                <span className="faint">—</span>
               )}
             </dd>
             <dt>Joined</dt>
@@ -133,22 +149,32 @@ export default function UserDetailPage() {
         </div>
 
         <div className="card">
-          <div className="muted small">Risk score</div>
-          <div className="stat-value">{u.risk_score ?? "—"}</div>
+          <div className="card-head">
+            <h3>Risk</h3>
+            <RiskBadge score={u.risk_score} />
+          </div>
           {u.risk_reasons?.length ? (
-            <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+            <ul className="stack" style={{ margin: 0, padding: 0, listStyle: "none", gap: 8 }}>
               {u.risk_reasons.map((r, i) => (
-                <li key={i}>{typeof r === "string" ? r : JSON.stringify(r)}</li>
+                <li key={i} className="row" style={{ flexWrap: "nowrap", alignItems: "flex-start" }}>
+                  <ShieldAlert size={15} className="bad" style={{ marginTop: 3, flexShrink: 0 }} />
+                  <span>{typeof r === "string" ? r : JSON.stringify(r)}</span>
+                </li>
               ))}
             </ul>
           ) : (
-            <p className="muted small">No risk reasons.</p>
+            <div className="row muted">
+              <ShieldCheck size={15} className="ok" /> No risk signals.
+            </div>
           )}
         </div>
 
         {canEdit && (
           <form className="card stack" onSubmit={adjust}>
-            <h3 style={{ margin: 0 }}>Adjust points</h3>
+            <div>
+              <h3>Adjust points</h3>
+              <p className="muted small">Credit or deduct points. The reason is written to the audit log.</p>
+            </div>
             <label className="field">
               <span>Amount (negative to deduct)</span>
               <input type="number" step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
@@ -157,11 +183,11 @@ export default function UserDetailPage() {
               <span>Reason</span>
               <input value={reason} onChange={(e) => setReason(e.target.value)} required />
             </label>
-            {adjustMsg.ok && <div className="ok small">{adjustMsg.ok}</div>}
+            <SuccessBox message={adjustMsg.ok} />
             <ErrorBox error={adjustMsg.err} />
             <div>
               <button className="btn primary" type="submit" disabled={busy || !reason.trim() || !amount}>
-                Apply
+                {busy ? "Applying…" : "Apply adjustment"}
               </button>
             </div>
           </form>
@@ -174,7 +200,9 @@ export default function UserDetailPage() {
       <h2>Devices</h2>
       <ObjTable rows={u.devices ?? []} empty="No devices recorded." />
 
-      <h2>Referrals ({u.referrals?.length ?? 0})</h2>
+      <h2>
+        Referrals <span className="badge plain">{u.referrals?.length ?? 0}</span>
+      </h2>
       <ObjTable rows={u.referrals ?? []} userLinkKeys={["id", "user_id"]} empty="No referrals." />
     </>
   );

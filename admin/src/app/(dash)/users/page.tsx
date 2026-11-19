@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import Link from "next/link";
 import { Search } from "lucide-react";
 import { useGet } from "@/lib/api";
-import { formatDate, formatNumber } from "@/lib/format";
-import { Addr, ErrorBox, Pager } from "@/components/ui";
+import { formatNumber } from "@/lib/format";
+import { Addr, DateCell, EmptyRow, ErrorBox, Loading, PageHeader, Pager, RiskBadge, UserCell } from "@/components/ui";
 import type { UserRow } from "@/lib/types";
 
 const PAGE_SIZE = 50;
@@ -29,15 +28,21 @@ export default function UsersPage() {
 
   return (
     <>
-      <h1>Users</h1>
-      <form className="inline card" onSubmit={submit} style={{ marginBottom: 14 }}>
-        <label className="field">
+      <PageHeader
+        title="Users"
+        description={data ? `${formatNumber(data.total)} users registered through the mini app.` : "Everyone registered through the mini app."}
+      />
+      <form className="inline card" onSubmit={submit} style={{ marginBottom: 16, padding: "14px 16px" }}>
+        <label className="field" style={{ flex: "1 1 320px" }}>
           <span>Search</span>
-          <input
-            value={form.q}
-            onChange={(e) => setForm({ ...form, q: e.target.value })}
-            placeholder="username, telegram id, wallet, X"
-          />
+          <div className="search">
+            <Search size={15} />
+            <input
+              value={form.q}
+              onChange={(e) => setForm({ ...form, q: e.target.value })}
+              placeholder="Username, Telegram ID, wallet or X handle"
+            />
+          </div>
         </label>
         <label className="field">
           <span>Min risk</span>
@@ -47,24 +52,25 @@ export default function UsersPage() {
             max={100}
             value={form.min_risk}
             onChange={(e) => setForm({ ...form, min_risk: e.target.value })}
-            style={{ width: 90 }}
+            placeholder="0–100"
+            style={{ width: 100 }}
           />
         </label>
         <label className="field">
-          <span>Banned</span>
-          <select value={form.banned} onChange={(e) => setForm({ ...form, banned: e.target.value })}>
-            <option value="">Any</option>
+          <span>Status</span>
+          <select value={form.banned} onChange={(e) => setForm({ ...form, banned: e.target.value })} style={{ width: 150 }}>
+            <option value="">All users</option>
+            <option value="false">Active</option>
             <option value="true">Banned</option>
-            <option value="false">Not banned</option>
           </select>
         </label>
         <button className="btn primary" type="submit">
-          <Search size={16} /> Search
+          Apply filters
         </button>
       </form>
 
       <ErrorBox error={error} />
-      {loading && !data && <p className="muted">Loading…</p>}
+      {loading && !data && <Loading />}
       {data && (
         <>
           <div className="table-wrap">
@@ -72,7 +78,7 @@ export default function UsersPage() {
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Username</th>
+                  <th>User</th>
                   <th>Telegram ID</th>
                   <th className="num">Balance</th>
                   <th className="num">Risk</th>
@@ -85,30 +91,30 @@ export default function UsersPage() {
               <tbody>
                 {data.items.map((u) => (
                   <tr key={u.id}>
+                    <td className="muted num">{u.id}</td>
                     <td>
-                      <Link href={`/users/${u.id}`}>{u.id}</Link>
+                      <UserCell id={u.id} username={u.username} />
                     </td>
-                    <td>
-                      <Link href={`/users/${u.id}`}>{u.username ? `@${u.username}` : "—"}</Link>
+                    <td className="muted num">{u.telegram_id}</td>
+                    <td className="num">
+                      <strong>{formatNumber(u.balance)}</strong>
                     </td>
-                    <td>{u.telegram_id}</td>
-                    <td className="num">{formatNumber(u.balance)}</td>
-                    <td className="num">{u.risk_score ?? "—"}</td>
+                    <td className="num">
+                      <RiskBadge score={u.risk_score} />
+                    </td>
                     <td>
                       <Addr value={u.wallet_address} />
                     </td>
-                    <td>{u.x_username ? `@${u.x_username}` : "—"}</td>
-                    <td>{u.banned ? <span className="badge red">banned</span> : <span className="muted">ok</span>}</td>
-                    <td>{formatDate(u.created_at)}</td>
-                  </tr>
-                ))}
-                {!data.items.length && (
-                  <tr>
-                    <td colSpan={9} className="muted">
-                      No users match.
+                    <td>{u.x_username ? `@${u.x_username}` : <span className="faint">—</span>}</td>
+                    <td>
+                      {u.banned ? <span className="badge red">Banned</span> : <span className="badge green">Active</span>}
+                    </td>
+                    <td>
+                      <DateCell value={u.created_at} />
                     </td>
                   </tr>
-                )}
+                ))}
+                {!data.items.length && <EmptyRow cols={9} title="No users match" text="Try a different search or clear the filters." />}
               </tbody>
             </table>
           </div>

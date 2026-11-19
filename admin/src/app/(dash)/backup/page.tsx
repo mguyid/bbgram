@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Upload } from "lucide-react";
+import { Download, ShieldAlert, Upload } from "lucide-react";
 import { apiFetch, clearSession } from "@/lib/api";
 import { useAdmin } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
-import { ConfirmButton, ErrorBox } from "@/components/ui";
+import { ConfirmButton, ErrorBox, PageHeader } from "@/components/ui";
 
 type RestoreResult = { ok: boolean; tables: Record<string, number>; created_at: string };
 
@@ -34,11 +34,13 @@ function ExportCard() {
 
   return (
     <div className="card stack">
-      <h3>Export</h3>
-      <p>
-        Download a full copy of the database: users, points, snapshots, airdrops, presale data, settings, admins and the
-        audit log.
-      </p>
+      <div>
+        <h3>Export</h3>
+        <p className="muted">
+          Download a full copy of the database: users, points, snapshots, airdrops, presale data, settings, admins and
+          the audit log.
+        </p>
+      </div>
       <div>
         <button type="button" className="btn primary" onClick={download} disabled={busy}>
           <Download size={16} /> {busy ? "Downloading…" : "Download backup"}
@@ -99,11 +101,17 @@ function ImportCard() {
 
   return (
     <div className="card danger-zone stack">
-      <h3 className="bad">Import (danger zone)</h3>
+      <div>
+        <h3 className="bad">Restore from backup</h3>
+        <p className="muted">Danger zone. Only use this to recover or migrate the server.</p>
+      </div>
       <div className="error">
-        Restoring replaces ALL data (users, points, settings, admins, audit log) with the backup&apos;s contents. Admin
-        logins in the backup replace the current ones. Encrypted settings only work if this server uses the same
-        JWT_SECRET as the one that made the backup.
+        <ShieldAlert size={16} />
+        <span>
+          Restoring replaces ALL data (users, points, settings, admins, audit log) with the backup&apos;s contents.
+          Admin logins in the backup replace the current ones. Encrypted settings only work if this server uses the
+          same JWT_SECRET as the one that made the backup.
+        </span>
       </div>
       <label className="field">
         <span>Backup file (.jsonl.gz)</span>
@@ -138,15 +146,16 @@ function ImportCard() {
 
 export default function BackupPage() {
   const me = useAdmin();
-  if (me?.role !== "owner") return <p className="muted">Only the owner can manage backups</p>;
+  if (me?.role !== "owner") return <div className="notice">Only the owner can manage backups.</div>;
 
   return (
     <>
-      <h1>Backup</h1>
-      <p className="notice">
-        Backup files contain password hashes, 2FA secrets and encrypted keys. Store them somewhere safe.
-      </p>
-      <div className="stack">
+      <PageHeader title="Backup" description="Export or restore the entire database." />
+      <div className="notice">
+        <ShieldAlert size={16} />
+        <span>Backup files contain password hashes, 2FA secrets and encrypted keys. Store them somewhere safe.</span>
+      </div>
+      <div className="stack" style={{ maxWidth: 760, marginTop: 16 }}>
         <ExportCard />
         <ImportCard />
       </div>

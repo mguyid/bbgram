@@ -21,21 +21,39 @@ import {
 } from "lucide-react";
 import { api, getStoredAdmin, getToken, logout, setStoredAdmin, type Admin } from "@/lib/api";
 import { AdminContext } from "@/lib/auth";
+import { BrandMark, Loading } from "@/components/ui";
 
-const NAV = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/users", label: "Users", icon: Users },
-  { href: "/clusters", label: "Clusters", icon: Network },
-  { href: "/x", label: "X review", icon: AtSign },
-  { href: "/config", label: "Config", icon: SlidersHorizontal },
-  { href: "/snapshots", label: "Snapshots", icon: Camera },
-  { href: "/presale", label: "Presale", icon: Ticket },
-  { href: "/contracts", label: "Contracts", icon: FileCode },
-  { href: "/settings", label: "Settings", icon: Settings },
-  { href: "/admins", label: "Admins", icon: ShieldCheck, ownerOnly: true },
-  { href: "/backup", label: "Backup", icon: Archive, ownerOnly: true },
-  { href: "/audit", label: "Audit log", icon: FileClock },
-  { href: "/account", label: "Account", icon: UserCog },
+type NavItem = { href: string; label: string; icon: typeof Users; ownerOnly?: boolean };
+
+const NAV: { label: string; items: NavItem[] }[] = [
+  {
+    label: "Community",
+    items: [
+      { href: "/", label: "Overview", icon: LayoutDashboard },
+      { href: "/users", label: "Users", icon: Users },
+      { href: "/clusters", label: "Clusters", icon: Network },
+      { href: "/x", label: "X review", icon: AtSign },
+    ],
+  },
+  {
+    label: "Token",
+    items: [
+      { href: "/snapshots", label: "Snapshots", icon: Camera },
+      { href: "/presale", label: "Presale", icon: Ticket },
+      { href: "/contracts", label: "Contracts", icon: FileCode },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { href: "/config", label: "Config", icon: SlidersHorizontal },
+      { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/admins", label: "Admins", icon: ShieldCheck, ownerOnly: true },
+      { href: "/backup", label: "Backup", icon: Archive, ownerOnly: true },
+      { href: "/audit", label: "Audit log", icon: FileClock },
+      { href: "/account", label: "Account", icon: UserCog },
+    ],
+  },
 ];
 
 export default function DashLayout({ children }: { children: React.ReactNode }) {
@@ -70,29 +88,56 @@ export default function DashLayout({ children }: { children: React.ReactNode }) 
     };
   }, [router]);
 
-  if (!admin) return <div className="login-wrap muted">Loading…</div>;
+  if (!admin) return <Loading full />;
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
   return (
     <AdminContext.Provider value={admin}>
       <div className="shell">
-        <nav className="sidebar">
-          <div className="brand">Baby Grand Admin</div>
-          {NAV.filter((n) => !n.ownerOnly || admin.role === "owner").map(({ href, label, icon: Icon }) => (
-            <Link key={href} href={href} className={`nav-link${isActive(href) ? " active" : ""}`}>
-              <Icon size={16} /> {label}
-            </Link>
-          ))}
+        <nav className="sidebar" aria-label="Main">
+          <Link href="/" className="brand">
+            <BrandMark />
+            <span>
+              <div className="brand-name">Baby Grand</div>
+              <div className="brand-sub">Operations console</div>
+            </span>
+          </Link>
+          {NAV.map((group) => {
+            const items = group.items.filter((n) => !n.ownerOnly || admin.role === "owner");
+            if (!items.length) return null;
+            return (
+              <div key={group.label} className="nav-group">
+                <div className="nav-label">{group.label}</div>
+                {items.map(({ href, label, icon: Icon }) => (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={`nav-link${isActive(href) ? " active" : ""}`}
+                    aria-current={isActive(href) ? "page" : undefined}
+                  >
+                    <Icon size={17} strokeWidth={1.9} /> {label}
+                  </Link>
+                ))}
+              </div>
+            );
+          })}
           <div className="sidebar-foot">
-            <div className="small">{admin.email}</div>
-            <div className="small muted">{admin.role}</div>
-            <button type="button" className="btn ghost small" onClick={logout} style={{ marginTop: 6, paddingLeft: 0 }}>
-              <LogOut size={14} /> Sign out
+            <span className="avatar">{admin.email.slice(0, 1)}</span>
+            <div className="who">
+              <div className="who-email" title={admin.email}>
+                {admin.email}
+              </div>
+              <div className="who-role">{admin.role}</div>
+            </div>
+            <button type="button" className="icon-btn" onClick={logout} aria-label="Sign out" title="Sign out">
+              <LogOut size={16} />
             </button>
           </div>
         </nav>
-        <main className="main">{children}</main>
+        <main className="main">
+          <div className="content">{children}</div>
+        </main>
       </div>
     </AdminContext.Provider>
   );

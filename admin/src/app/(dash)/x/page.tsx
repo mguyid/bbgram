@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { api, itemsOf, useGet } from "@/lib/api";
 import { useCanEdit } from "@/lib/auth";
-import { formatDate } from "@/lib/format";
-import { ConfirmButton, ErrorBox } from "@/components/ui";
+import { ConfirmButton, DateCell, EmptyRow, ErrorBox, Loading, PageHeader, UserCell as User } from "@/components/ui";
 
 type Post = {
   id: number;
@@ -27,7 +25,7 @@ type Bio = {
 };
 
 function UserCell({ id, username }: { id: number; username?: string | null }) {
-  return <Link href={`/users/${id}`}>{username ? `@${username}` : `User ${id}`}</Link>;
+  return <User id={id} username={username} />;
 }
 
 function Posts() {
@@ -38,10 +36,10 @@ function Posts() {
 
   return (
     <>
-      <div className="row" style={{ marginBottom: 12 }}>
+      <div className="row" style={{ marginBottom: 14 }}>
         <label className="field inline">
-          <span>Status</span>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <span className="muted">Status</span>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: 140 }}>
             <option value="active">Active</option>
             <option value="revoked">Revoked</option>
             <option value="">All</option>
@@ -49,7 +47,7 @@ function Posts() {
         </label>
       </div>
       <ErrorBox error={error} />
-      {loading && !data && <p className="muted">Loading…</p>}
+      {loading && !data && <Loading />}
       <div className="table-wrap">
         <table>
           <thead>
@@ -69,17 +67,19 @@ function Posts() {
                   <UserCell id={p.user_id} username={p.username} />
                 </td>
                 <td>{p.x_username ? `@${p.x_username}` : "—"}</td>
-                <td className="wrap">
-                  <a href={p.url} target="_blank" rel="noreferrer noopener">
-                    {p.url} <ExternalLink size={12} />
+                <td className="wrap" style={{ maxWidth: 380 }}>
+                  <a href={p.url} target="_blank" rel="noreferrer noopener" className="row" style={{ gap: 4, display: "inline-flex" }}>
+                    {p.url.replace(/^https?:\/\/(www\.)?/, "")} <ExternalLink size={12} />
                   </a>
                 </td>
                 <td>
-                  <span className={`badge ${p.status === "active" ? "green" : "red"}`}>{p.status}</span>
+                  <span className={`badge ${p.status === "active" ? "green" : "red"}`}>{p.status === "active" ? "Active" : "Revoked"}</span>
                 </td>
-                <td>{formatDate(p.created_at)}</td>
+                <td>
+                  <DateCell value={p.created_at} />
+                </td>
                 {canEdit && (
-                  <td>
+                  <td className="actions-cell">
                     {p.status === "active" && (
                       <ConfirmButton
                         label="Revoke"
@@ -97,13 +97,7 @@ function Posts() {
                 )}
               </tr>
             ))}
-            {data !== undefined && !posts.length && (
-              <tr>
-                <td colSpan={6} className="muted">
-                  No posts.
-                </td>
-              </tr>
-            )}
+            {data !== undefined && !posts.length && <EmptyRow cols={6} title="No posts" text="Submitted X posts appear here." />}
           </tbody>
         </table>
       </div>
@@ -119,7 +113,7 @@ function Bios() {
   return (
     <>
       <ErrorBox error={error} />
-      {loading && !data && <p className="muted">Loading…</p>}
+      {loading && !data && <Loading />}
       <div className="table-wrap">
         <table>
           <thead>
@@ -145,9 +139,11 @@ function Bios() {
                     "—"
                   )}
                 </td>
-                <td>{formatDate(b.marked_at)}</td>
+                <td>
+                  <DateCell value={b.marked_at} />
+                </td>
                 {canEdit && (
-                  <td>
+                  <td className="actions-cell">
                     <ConfirmButton
                       label="Revoke"
                       className="btn danger small"
@@ -164,11 +160,7 @@ function Bios() {
               </tr>
             ))}
             {data !== undefined && !bios.length && (
-              <tr>
-                <td colSpan={4} className="muted">
-                  No users have marked their bio.
-                </td>
-              </tr>
+              <EmptyRow cols={4} title="No bio marks yet" text="Users who add Baby Grand to their X bio appear here." />
             )}
           </tbody>
         </table>
@@ -181,7 +173,7 @@ export default function XReviewPage() {
   const [tab, setTab] = useState<"posts" | "bios">("posts");
   return (
     <>
-      <h1>X review</h1>
+      <PageHeader title="X review" description="Posts and bio marks that earn daily X points. Revoke anything that breaks the rules." />
       <div className="tabs">
         <button type="button" className={`tab${tab === "posts" ? " active" : ""}`} onClick={() => setTab("posts")}>
           Posts

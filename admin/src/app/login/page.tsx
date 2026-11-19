@@ -3,7 +3,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { api, getToken, setSession, type Admin } from "@/lib/api";
-import { ErrorBox } from "@/components/ui";
+import { Lock } from "lucide-react";
+import { BrandMark, ErrorBox } from "@/components/ui";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -40,49 +41,61 @@ export default function LoginPage() {
 
   return (
     <div className="login-wrap">
-      <form className="card login stack" onSubmit={submit}>
-        <h1>Baby Grand Admin</h1>
-        <label className="field">
-          <span>Email</span>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="username"
-          />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-          />
-        </label>
-        {needsTotp && (
+      <div className="login">
+        <form className="card login-card stack" onSubmit={submit}>
+          <div className="login-head">
+            <BrandMark size={22} />
+            <h1>Sign in to Baby Grand</h1>
+            <p className="muted">Operations console for admins.</p>
+          </div>
           <label className="field">
-            <span>2FA code</span>
+            <span>Email</span>
             <input
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              value={totp}
-              onChange={(e) => setTotp(e.target.value.replace(/\D/g, ""))}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               required
-              autoComplete="one-time-code"
-              placeholder="123456"
+              autoComplete="username"
+              placeholder="you@company.com"
               autoFocus
             />
           </label>
-        )}
-        <ErrorBox error={error} />
-        <button className="btn primary" type="submit" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
+          <label className="field">
+            <span>Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+            />
+          </label>
+          {needsTotp && (
+            <label className="field">
+              <span>Authenticator code</span>
+              <input
+                className="otp"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                value={totp}
+                onChange={(e) => setTotp(e.target.value.replace(/\D/g, ""))}
+                required
+                autoComplete="one-time-code"
+                placeholder="000000"
+                autoFocus
+              />
+            </label>
+          )}
+          <ErrorBox error={error} />
+          <button className="btn primary" type="submit" disabled={busy}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+        <div className="login-foot">
+          <Lock size={12} /> Restricted to Baby Grand administrators
+        </div>
+      </div>
     </div>
   );
 }

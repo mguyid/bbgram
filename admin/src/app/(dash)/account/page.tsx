@@ -3,7 +3,8 @@
 import { useState, type FormEvent } from "react";
 import QRCode from "qrcode";
 import { api, setStoredAdmin, useGet, type Admin } from "@/lib/api";
-import { ErrorBox } from "@/components/ui";
+import { ShieldCheck, ShieldOff } from "lucide-react";
+import { ErrorBox, Loading, PageHeader } from "@/components/ui";
 
 function CodeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -17,7 +18,9 @@ function CodeInput({ value, onChange }: { value: string; onChange: (v: string) =
         onChange={(e) => onChange(e.target.value.replace(/\D/g, ""))}
         required
         autoComplete="one-time-code"
-        placeholder="123456"
+        placeholder="000000"
+        className="otp"
+        style={{ maxWidth: 200 }}
       />
     </label>
   );
@@ -71,54 +74,74 @@ export default function AccountPage() {
 
   return (
     <>
-      <h1>Account</h1>
+      <PageHeader title="Account" description="Your sign-in details and two-factor authentication." />
       <ErrorBox error={loadError} />
+      {!me && !loadError && <Loading />}
       {me && (
-        <div className="card stack" style={{ maxWidth: 520 }}>
-          <div>
-            <strong>{me.email}</strong> <span className="muted">· {me.role}</span>
-          </div>
-          <h2>Two-factor authentication</h2>
-
-          {me.totp_enabled ? (
-            <form className="stack" onSubmit={disable}>
-              <div>
-                <span className="badge green">on</span> Sign-in asks for a code from your authenticator app.
-              </div>
-              <CodeInput value={code} onChange={setCode} />
-              <button className="btn danger" type="submit" disabled={busy}>
-                Turn off 2FA
-              </button>
-            </form>
-          ) : setup ? (
-            <form className="stack" onSubmit={enable}>
-              <div>
-                Scan this with an authenticator app (Google Authenticator, Authy, 1Password…), or enter the key.
-              </div>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img className="qr" src={setup.qr} alt="2FA QR code" />
-              <code className="json">{setup.secret}</code>
-              <CodeInput value={code} onChange={setCode} />
-              <div className="inline">
-                <button className="btn primary" type="submit" disabled={busy}>
-                  Turn on 2FA
-                </button>
-                <button className="btn ghost" type="button" onClick={() => setSetup(null)} disabled={busy}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          ) : (
-            <div className="stack">
-              <div className="muted">Off. Sign-in needs only email and password.</div>
-              <div>
-                <button className="btn primary" type="button" onClick={start} disabled={busy}>
-                  Set up 2FA
-                </button>
-              </div>
+        <div className="stack" style={{ maxWidth: 620 }}>
+          <div className="card row" style={{ gap: 14 }}>
+            <span className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
+              {me.email.slice(0, 1)}
+            </span>
+            <div>
+              <div style={{ fontWeight: 600 }}>{me.email}</div>
+              <div className="muted small" style={{ textTransform: "capitalize" }}>{me.role}</div>
             </div>
-          )}
-          <ErrorBox error={error} />
+          </div>
+          <div className="card stack">
+            <div className="card-head" style={{ marginBottom: 0 }}>
+              <div className="row" style={{ gap: 12, flexWrap: "nowrap" }}>
+                <div className={`status-orb ${me.totp_enabled ? "on" : "off"}`}>
+                  {me.totp_enabled ? <ShieldCheck size={20} /> : <ShieldOff size={20} />}
+                </div>
+                <div>
+                  <h3>Two-factor authentication</h3>
+                  <p>A code from an authenticator app is asked for at every sign-in.</p>
+                </div>
+              </div>
+              {me.totp_enabled ? <span className="badge green">On</span> : <span className="badge amber">Off</span>}
+            </div>
+
+            {me.totp_enabled ? (
+              <form className="stack" onSubmit={disable}>
+                <div className="muted">To turn 2FA off, confirm with a current code.</div>
+                <CodeInput value={code} onChange={setCode} />
+                <div>
+                  <button className="btn danger" type="submit" disabled={busy}>
+                    Turn off 2FA
+                  </button>
+                </div>
+              </form>
+            ) : setup ? (
+              <form className="stack" onSubmit={enable}>
+                <div>
+                  Scan this with an authenticator app (Google Authenticator, Authy, 1Password…), or enter the key.
+                </div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="qr" src={setup.qr} alt="2FA QR code" />
+                <code className="json">{setup.secret}</code>
+                <CodeInput value={code} onChange={setCode} />
+                <div className="row">
+                  <button className="btn primary" type="submit" disabled={busy}>
+                    Turn on 2FA
+                  </button>
+                  <button className="btn ghost" type="button" onClick={() => setSetup(null)} disabled={busy}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="stack">
+                <div className="muted">Sign-in currently needs only email and password. Turn on 2FA to protect this account.</div>
+                <div>
+                  <button className="btn primary" type="button" onClick={start} disabled={busy}>
+                    Set up 2FA
+                  </button>
+                </div>
+              </div>
+            )}
+            <ErrorBox error={error} />
+          </div>
         </div>
       )}
     </>

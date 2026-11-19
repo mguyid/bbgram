@@ -32,7 +32,21 @@ export function shortAddr(a: string): string {
 export function formatDate(s: string | null | undefined): string {
   if (!s) return "—";
   const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? s : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** "3h ago" style; falls back to the full date after a week. */
+export function timeAgo(s: string | null | undefined): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  const sec = (Date.now() - d.getTime()) / 1000;
+  if (Number.isNaN(sec)) return s;
+  if (sec < 60) return "just now";
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  if (sec < 7 * 86400) return `${Math.floor(sec / 86400)}d ago`;
+  return formatDate(s);
 }
 
 export function isHexAddress(v: unknown): v is string {

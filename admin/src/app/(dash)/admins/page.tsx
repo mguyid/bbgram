@@ -4,8 +4,7 @@ import { useState, type FormEvent } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { api, itemsOf, useGet, type Admin, type Role } from "@/lib/api";
 import { useAdmin } from "@/lib/auth";
-import { formatDate } from "@/lib/format";
-import { ConfirmButton, ErrorBox } from "@/components/ui";
+import { ConfirmButton, DateCell, ErrorBox, PageHeader } from "@/components/ui";
 
 type AdminRow = Admin & { created_at?: string };
 
@@ -44,6 +43,12 @@ function CreateAdmin({ onCreated }: { onCreated: () => void }) {
 
   return (
     <div className="card stack">
+      <div>
+        <h3>Add an admin</h3>
+        <p className="muted small">
+          Viewers can read everything. Admins can also change data. Owners also manage settings, admins and backups.
+        </p>
+      </div>
       <form className="inline" onSubmit={submit}>
         <label className="field">
           <span>Email</span>
@@ -67,10 +72,14 @@ function CreateAdmin({ onCreated }: { onCreated: () => void }) {
         </label>
         <label className="field">
           <span>Role</span>
-          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
-            <option value="viewer">viewer</option>
-            <option value="admin">admin</option>
-            <option value="owner">owner</option>
+          <select
+            value={form.role}
+            onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
+            style={{ width: 130 }}
+          >
+            <option value="viewer">Viewer</option>
+            <option value="admin">Admin</option>
+            <option value="owner">Owner</option>
           </select>
         </label>
         <button className="btn primary" type="submit" disabled={busy}>
@@ -79,8 +88,11 @@ function CreateAdmin({ onCreated }: { onCreated: () => void }) {
       </form>
       <ErrorBox error={error} />
       {created && (
-        <div className="notice">
-          Created <strong>{created}</strong>. They sign in with email and password and can turn on 2FA under Account.
+        <div className="success">
+          <span>
+            Created <strong>{created}</strong>. They sign in with email and password and can turn on 2FA under
+            Account.
+          </span>
         </div>
       )}
     </div>
@@ -93,11 +105,11 @@ export default function AdminsPage() {
   const { data, error, reload } = useGet<unknown>(isOwner ? "/admins" : null);
   const admins = itemsOf<AdminRow>(data);
 
-  if (!isOwner) return <p className="muted">Only owners can manage admins.</p>;
+  if (!isOwner) return <div className="notice">Only owners can manage admins.</div>;
 
   return (
     <>
-      <h1>Admins</h1>
+      <PageHeader title="Admins" description="People who can sign in to this console." />
       <CreateAdmin onCreated={reload} />
       <ErrorBox error={error} />
       <div className="table-wrap" style={{ marginTop: 16 }}>
@@ -108,21 +120,32 @@ export default function AdminsPage() {
               <th>Email</th>
               <th>Role</th>
               <th>2FA</th>
-              <th>Created</th>
+              <th>Added</th>
               <th />
             </tr>
           </thead>
           <tbody>
             {admins.map((a) => (
               <tr key={a.id}>
-                <td>{a.id}</td>
-                <td>{a.email}</td>
-                <td>{a.role}</td>
-                <td>{a.totp_enabled ? <span className="badge green">on</span> : <span className="muted">off</span>}</td>
-                <td>{formatDate(a.created_at)}</td>
+                <td className="muted num">{a.id}</td>
                 <td>
+                  <span className="user-cell">
+                    <span className="avatar">{a.email.slice(0, 1)}</span>
+                    {a.email}
+                  </span>
+                </td>
+                <td>
+                  <span className={`badge plain ${a.role === "owner" ? "blue" : a.role === "admin" ? "green" : ""}`}>
+                    {a.role[0].toUpperCase() + a.role.slice(1)}
+                  </span>
+                </td>
+                <td>{a.totp_enabled ? <span className="badge green">On</span> : <span className="badge">Off</span>}</td>
+                <td>
+                  <DateCell value={a.created_at} />
+                </td>
+                <td className="actions-cell">
                   {String(a.id) === String(me?.id) ? (
-                    <span className="muted small">you</span>
+                    <span className="badge plain">You</span>
                   ) : (
                     <ConfirmButton
                       label={<Trash2 size={14} />}

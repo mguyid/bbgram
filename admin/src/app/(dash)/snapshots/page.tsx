@@ -3,13 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Camera } from "lucide-react";
+import { Camera, Pause, Play } from "lucide-react";
 import { api, itemsOf, useGet } from "@/lib/api";
 import { useCanEdit } from "@/lib/auth";
 import { formatDate, formatNumber } from "@/lib/format";
 import type { Airdrop } from "@/lib/types";
 import { AirdropPanel } from "@/components/airdrop";
-import { ErrorBox } from "@/components/ui";
+import { DateCell, EmptyRow, EmptyState, ErrorBox, PageHeader } from "@/components/ui";
 
 type SnapshotRow = { id: number; created_at: string; total_points: number; [k: string]: unknown };
 
@@ -40,25 +40,35 @@ export default function SnapshotsPage() {
 
   return (
     <>
-      <h1>Snapshots</h1>
+      <PageHeader
+        title="Snapshots"
+        description="Freeze point balances, review exclusions, then build a Merkle airdrop from the result."
+        actions={
+          canEdit && (
+            <button type="button" className="btn primary" disabled={!paused || busy} onClick={create}>
+              <Camera size={16} /> {busy ? "Creating…" : "Create snapshot"}
+            </button>
+          )
+        }
+      />
       {canEdit && (
-        <div className="card row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
-          <div>
-            {paused ? (
-              "Activity is paused. You can take a snapshot."
-            ) : (
-              <>
-                Activity is running. <Link href="/">Pause it on Overview</Link> before taking a snapshot.
-              </>
-            )}
-            <div className="muted small">
-              Users at or above the risk threshold, banned users and users without a wallet are excluded
-              automatically.
+        <div className="card status-panel" style={{ marginBottom: 20 }}>
+          <div className={`status-orb ${paused ? "on" : "off"}`}>{paused ? <Pause size={20} /> : <Play size={20} />}</div>
+          <div className="grow">
+            <div className="status-title">
+              {paused ? "Ready to snapshot" : "Earning is still running"}
+            </div>
+            <div className="muted small" style={{ marginTop: 2 }}>
+              {paused ? (
+                "Activity is paused, so balances are stable."
+              ) : (
+                <>
+                  <Link href="/">Pause earning on Overview</Link> before taking a snapshot.
+                </>
+              )}{" "}
+              Users at or above the risk threshold, banned users and users without a wallet are excluded automatically.
             </div>
           </div>
-          <button type="button" className="btn primary" disabled={!paused || busy} onClick={create}>
-            <Camera size={16} /> {busy ? "Creating…" : "Create snapshot"}
-          </button>
         </div>
       )}
       <ErrorBox error={error || stats.error || snaps.error} />
@@ -76,18 +86,16 @@ export default function SnapshotsPage() {
             {rows.map((s) => (
               <tr key={s.id}>
                 <td>
-                  <Link href={`/snapshots/${s.id}`}>#{s.id}</Link>
+                  <Link href={`/snapshots/${s.id}`}>Snapshot #{s.id}</Link>
                 </td>
-                <td>{formatDate(s.created_at)}</td>
+                <td>
+                  <DateCell value={s.created_at} />
+                </td>
                 <td className="num">{formatNumber(s.total_points)}</td>
               </tr>
             ))}
             {snaps.data !== undefined && !rows.length && (
-              <tr>
-                <td colSpan={3} className="muted">
-                  No snapshots yet.
-                </td>
-              </tr>
+              <EmptyRow cols={3} title="No snapshots yet" text="Pause earning, then create the first snapshot." />
             )}
           </tbody>
         </table>
@@ -95,12 +103,16 @@ export default function SnapshotsPage() {
 
       <h2>Airdrops</h2>
       <ErrorBox error={airdrops.error} />
-      {airdrops.data !== undefined && !drops.length && <p className="muted">No airdrops built yet.</p>}
+      {airdrops.data !== undefined && !drops.length && (
+        <div className="table-wrap">
+          <EmptyState title="No airdrops built yet" text="Open a snapshot and run a conversion preview to build one." />
+        </div>
+      )}
       <div className="stack">
         {drops.map((a) => (
           <div key={a.id}>
             {a.snapshot_id !== undefined && (
-              <div className="small muted" style={{ marginBottom: 4 }}>
+              <div className="small muted" style={{ marginBottom: 6 }}>
                 From <Link href={`/snapshots/${a.snapshot_id}`}>snapshot #{a.snapshot_id}</Link>
                 {a.created_at && ` · ${formatDate(a.created_at)}`}
               </div>

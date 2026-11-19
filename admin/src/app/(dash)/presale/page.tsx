@@ -1,13 +1,12 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import Link from "next/link";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Coins, ListChecks, Plus, Search, Trash2, Users } from "lucide-react";
 import { api, itemsOf, useGet } from "@/lib/api";
 import { useCanEdit } from "@/lib/auth";
-import { formatDate, formatWei, isHexAddress } from "@/lib/format";
+import { formatNumber, formatWei, isHexAddress } from "@/lib/format";
 import type { UserRow } from "@/lib/types";
-import { Addr, ConfirmButton, ErrorBox } from "@/components/ui";
+import { Addr, ConfirmButton, DateCell, EmptyRow, ErrorBox, PageHeader, Stat, SuccessBox, UserCell } from "@/components/ui";
 
 type WhitelistRow = { wallet_address: string; user_id?: number | null; username?: string | null; created_at?: string };
 type Contribution = {
@@ -63,6 +62,12 @@ function AddToWhitelist({ onAdded }: { onAdded: () => void }) {
 
   return (
     <div className="card">
+      <div className="card-head">
+        <div>
+          <h3>Add to whitelist</h3>
+          <p>Whitelisted wallets can contribute during the presale.</p>
+        </div>
+      </div>
       <div className="tabs">
         <button type="button" className={`tab${mode === "wallet" ? " active" : ""}`} onClick={() => setMode("wallet")}>
           By wallet address
@@ -99,11 +104,11 @@ function AddToWhitelist({ onAdded }: { onAdded: () => void }) {
                   {results.map((u) => (
                     <tr key={u.id}>
                       <td>
-                        <Link href={`/users/${u.id}`}>{u.username ? `@${u.username}` : `User ${u.id}`}</Link>
+                        <UserCell id={u.id} username={u.username} />
                       </td>
-                      <td>{u.telegram_id}</td>
+                      <td className="muted">{u.telegram_id}</td>
                       <td>{u.wallet_address ? <Addr value={u.wallet_address} /> : <span className="muted">no wallet linked</span>}</td>
-                      <td>
+                      <td className="actions-cell">
                         <button
                           type="button"
                           className="btn small primary"
@@ -115,18 +120,14 @@ function AddToWhitelist({ onAdded }: { onAdded: () => void }) {
                       </td>
                     </tr>
                   ))}
-                  {!results.length && (
-                    <tr>
-                      <td className="muted">No users found.</td>
-                    </tr>
-                  )}
+                  {!results.length && <EmptyRow cols={4} title="No users found" />}
                 </tbody>
               </table>
             </div>
           )}
         </>
       )}
-      {msg.ok && <div className="ok" style={{ marginTop: 8 }}>{msg.ok}</div>}
+      <SuccessBox message={msg.ok} />
       <ErrorBox error={msg.err} />
     </div>
   );
@@ -140,9 +141,26 @@ export default function PresalePage() {
 
   return (
     <>
-      <h1>Presale</h1>
+      <PageHeader title="Presale" description="Manage the wallet whitelist and track USDT contributions indexed from the chain." />
+      {contrib.data && (
+        <div className="grid" style={{ marginBottom: 8 }}>
+          <Stat
+            label="Raised"
+            icon={Coins}
+            value={
+              <>
+                {formatWei(contrib.data.raised_wei, 2)} <span className="stat-sub">USDT</span>
+              </>
+            }
+          />
+          <Stat label="Contributions" icon={Users} value={formatNumber(contrib.data.items.length)} />
+          <Stat label="Whitelisted wallets" icon={ListChecks} value={formatNumber(whitelist.length)} />
+        </div>
+      )}
 
-      <h2>Whitelist ({whitelist.length})</h2>
+      <h2>
+        Whitelist <span className="badge plain">{whitelist.length}</span>
+      </h2>
       {canEdit && <AddToWhitelist onAdded={wl.reload} />}
       <ErrorBox error={wl.error} />
       <div className="table-wrap" style={{ marginTop: 12 }}>
@@ -162,15 +180,13 @@ export default function PresalePage() {
                   <Addr value={w.wallet_address} />
                 </td>
                 <td>
-                  {w.user_id ? (
-                    <Link href={`/users/${w.user_id}`}>{w.username ? `@${w.username}` : `User ${w.user_id}`}</Link>
-                  ) : (
-                    "—"
-                  )}
+                  {w.user_id ? <UserCell id={w.user_id} username={w.username} /> : <span className="faint">—</span>}
                 </td>
-                <td>{formatDate(w.created_at)}</td>
+                <td>
+                  <DateCell value={w.created_at} />
+                </td>
                 {canEdit && (
-                  <td>
+                  <td className="actions-cell">
                     <ConfirmButton
                       label={<Trash2 size={14} />}
                       className="btn danger small"
@@ -187,11 +203,7 @@ export default function PresalePage() {
               </tr>
             ))}
             {wl.data !== undefined && !whitelist.length && (
-              <tr>
-                <td colSpan={4} className="muted">
-                  Whitelist is empty.
-                </td>
-              </tr>
+              <EmptyRow cols={4} title="Whitelist is empty" text="Add wallets above to let them contribute." />
             )}
           </tbody>
         </table>
@@ -201,11 +213,6 @@ export default function PresalePage() {
       <ErrorBox error={contrib.error} />
       {contrib.data && (
         <>
-          <div className="card" style={{ marginBottom: 12, display: "inline-block" }}>
-            <div className="muted small">Raised (USDT)</div>
-            <div className="stat-value">{formatWei(contrib.data.raised_wei, 2)}</div>
-            <div className="muted small">{contrib.data.items.length} contributions</div>
-          </div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -224,21 +231,21 @@ export default function PresalePage() {
                     <td>
                       <Addr value={c.wallet_address} />
                     </td>
-                    <td>{c.user_id ? <Link href={`/users/${c.user_id}`}>{c.user_id}</Link> : "—"}</td>
-                    <td className="num">{formatWei(c.amount_wei, 2)}</td>
+                    <td>{c.user_id ? <UserCell id={c.user_id} /> : <span className="faint">—</span>}</td>
+                    <td className="num">
+                      <strong>{formatWei(c.amount_wei, 2)}</strong>
+                    </td>
                     <td>
                       <Addr value={c.tx_hash} />
                     </td>
-                    <td className="num">{c.block_number}</td>
-                    <td>{formatDate(c.created_at)}</td>
+                    <td className="num muted">{c.block_number}</td>
+                    <td>
+                      <DateCell value={c.created_at} />
+                    </td>
                   </tr>
                 ))}
                 {!contrib.data.items.length && (
-                  <tr>
-                    <td colSpan={6} className="muted">
-                      No contributions yet.
-                    </td>
-                  </tr>
+                  <EmptyRow cols={6} title="No contributions yet" text="Contributions appear once the indexer sees them on chain." />
                 )}
               </tbody>
             </table>

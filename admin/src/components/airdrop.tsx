@@ -41,7 +41,7 @@ export function AirdropPanel({ airdrop }: { airdrop: Airdrop }) {
         <dd>
           #{airdrop.id}{" "}
           {airdrop.active !== undefined && (
-            <span className={`badge${airdrop.active ? " green" : ""}`}>{airdrop.active ? "active" : "not active"}</span>
+            <span className={`badge${airdrop.active ? " green" : ""}`}>{airdrop.active ? "Root active on chain" : "Root not set on chain"}</span>
           )}
         </dd>
         <dt>Merkle root</dt>

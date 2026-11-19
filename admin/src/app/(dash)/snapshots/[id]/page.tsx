@@ -8,7 +8,8 @@ import { useCanEdit } from "@/lib/auth";
 import { formatDate, formatNumber } from "@/lib/format";
 import type { Airdrop } from "@/lib/types";
 import { AirdropPanel } from "@/components/airdrop";
-import { Addr, ConfirmButton, ErrorBox } from "@/components/ui";
+import { Calculator, Hammer } from "lucide-react";
+import { Addr, ConfirmButton, EmptyRow, ErrorBox, Loading, PageHeader, RiskBadge, Stat, UserCell } from "@/components/ui";
 
 type Item = {
   user_id: number;
@@ -76,31 +77,26 @@ export default function SnapshotDetailPage() {
   };
 
   if (error && !snap) return <ErrorBox error={error} />;
-  if (!snap) return <p className="muted">Loading…</p>;
+  if (!snap) return <Loading />;
 
   const excludedCount = snap.items.filter((i) => i.excluded).length;
   const rows = onlyExcluded ? snap.items.filter((i) => i.excluded) : snap.items;
 
   return (
     <>
-      <p className="small">
-        <Link href="/snapshots">← Snapshots</Link>
-      </p>
-      <h1>Snapshot #{snap.id}</h1>
-      <div className="grid" style={{ marginBottom: 16 }}>
-        <div className="card">
-          <div className="muted small">Created</div>
-          <div>{formatDate(snap.created_at)}</div>
-        </div>
-        <div className="card">
-          <div className="muted small">Total points (included)</div>
-          <div className="stat-value">{formatNumber(snap.total_points)}</div>
-        </div>
-        <div className="card">
-          <div className="muted small">Users</div>
-          <div className="stat-value">{formatNumber(snap.items.length - excludedCount)}</div>
-          <div className="muted small">{formatNumber(excludedCount)} excluded</div>
-        </div>
+      <PageHeader
+        back={{ href: "/snapshots", label: "Snapshots" }}
+        title={`Snapshot #${snap.id}`}
+        description={`Taken ${formatDate(snap.created_at)}`}
+      />
+      <div className="grid">
+        <Stat label="Total points (included)" value={formatNumber(snap.total_points)} />
+        <Stat label="Included users" value={formatNumber(snap.items.length - excludedCount)} />
+        <Stat
+          label="Excluded users"
+          value={formatNumber(excludedCount)}
+          sub="Risk, bans and missing wallets"
+        />
       </div>
 
       <h2>Conversion</h2>
@@ -137,34 +133,29 @@ export default function SnapshotDetailPage() {
             />
           </label>
           <button className="btn primary" type="submit" disabled={busy}>
-            Preview
+            <Calculator size={16} /> {busy ? "Calculating…" : "Preview"}
           </button>
         </form>
       ) : (
-        <p className="muted">Viewers cannot build airdrops.</p>
+        <div className="notice">Viewers cannot build airdrops.</div>
       )}
       <ErrorBox error={previewErr} />
 
       {preview && (
         <div className="section stack">
           <div className="grid">
-            <div className="card">
-              <div className="muted small">Recipients</div>
-              <div className="stat-value">{formatNumber(preview.data.recipients)}</div>
-            </div>
-            <div className="card">
-              <div className="muted small">Total points</div>
-              <div className="stat-value">{formatNumber(preview.data.total_points)}</div>
-            </div>
-            <div className="card">
-              <div className="muted small">Total tokens</div>
-              <div className="stat-value">{preview.data.total_tokens}</div>
-            </div>
+            <Stat label="Recipients" value={formatNumber(preview.data.recipients)} />
+            <Stat label="Total points" value={formatNumber(preview.data.total_points)} />
+            <Stat label="Total tokens" value={preview.data.total_tokens} />
           </div>
           {!airdrop && (
             <div>
               <ConfirmButton
-                label="Build airdrop"
+                label={
+                  <>
+                    <Hammer size={16} /> Build airdrop
+                  </>
+                }
                 className="btn primary"
                 title="Build airdrop?"
                 message={
@@ -229,7 +220,7 @@ export default function SnapshotDetailPage() {
       )}
 
       <h2>Balances</h2>
-      <div className="row" style={{ marginBottom: 10 }}>
+      <div className="row" style={{ marginBottom: 12 }}>
         <label className="field inline">
           <input type="checkbox" checked={onlyExcluded} onChange={(e) => setOnlyExcluded(e.target.checked)} />
           <span>Show excluded only</span>
@@ -252,22 +243,26 @@ export default function SnapshotDetailPage() {
             {rows.map((i) => (
               <tr key={i.user_id} className={i.excluded ? "excluded" : undefined}>
                 <td>
-                  <Link href={`/users/${i.user_id}`}>{i.username ? `@${i.username}` : `User ${i.user_id}`}</Link>
+                  <UserCell id={i.user_id} username={i.username} />
                 </td>
                 <td>
                   <Addr value={i.wallet_address} />
                 </td>
                 <td className="num">{formatNumber(i.points)}</td>
-                <td className="num">{i.risk_score ?? "—"}</td>
+                <td className="num">
+                  <RiskBadge score={i.risk_score} />
+                </td>
                 <td>
                   {i.excluded ? (
-                    <span className="bad">Excluded{i.exclusion_reason ? `: ${i.exclusion_reason}` : ""}</span>
+                    <span className="badge red" title={i.exclusion_reason ?? undefined}>
+                      Excluded{i.exclusion_reason ? ` · ${i.exclusion_reason}` : ""}
+                    </span>
                   ) : (
-                    <span className="muted">Included</span>
+                    <span className="badge green">Included</span>
                   )}
                 </td>
                 {canEdit && (
-                  <td>
+                  <td className="actions-cell">
                     <button
                       type="button"
                       className="btn small"
@@ -280,13 +275,7 @@ export default function SnapshotDetailPage() {
                 )}
               </tr>
             ))}
-            {!rows.length && (
-              <tr>
-                <td colSpan={6} className="muted">
-                  No users.
-                </td>
-              </tr>
-            )}
+            {!rows.length && <EmptyRow cols={6} title="No users" />}
           </tbody>
         </table>
       </div>

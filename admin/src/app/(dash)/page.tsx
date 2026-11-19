@@ -1,10 +1,10 @@
 "use client";
 
-import { Pause, Play } from "lucide-react";
+import { Activity, Coins, Pause, Play, Sparkles, Users, Wallet } from "lucide-react";
 import { api, useGet } from "@/lib/api";
 import { useCanEdit } from "@/lib/auth";
 import { formatNumber, formatWei } from "@/lib/format";
-import { ConfirmButton, ErrorBox, Stat } from "@/components/ui";
+import { ConfirmButton, ErrorBox, Loading, PageHeader, Stat } from "@/components/ui";
 
 type Stats = {
   users: number;
@@ -21,32 +21,58 @@ export default function OverviewPage() {
 
   return (
     <>
-      <h1>Overview</h1>
+      <PageHeader title="Overview" description="Community growth, points and presale at a glance." />
       <ErrorBox error={error} />
+      {!data && !error && <Loading />}
       {data && (
         <>
           <div className="grid">
-            <Stat label="Users" value={formatNumber(data.users)} sub={`+${formatNumber(data.users_today)} today`} />
-            <Stat label="Points issued" value={formatNumber(data.points_total)} />
-            <Stat label="Wallets linked" value={formatNumber(data.wallets_linked)} />
             <Stat
-              label="Presale raised (USDT)"
-              value={formatWei(data.presale?.raised_wei, 2)}
+              label="Users"
+              icon={Users}
+              value={formatNumber(data.users)}
+              sub={
+                <>
+                  <span className="up">+{formatNumber(data.users_today)}</span> today
+                </>
+              }
+            />
+            <Stat label="Points issued" icon={Sparkles} value={formatNumber(data.points_total)} />
+            <Stat
+              label="Wallets linked"
+              icon={Wallet}
+              value={formatNumber(data.wallets_linked)}
+              sub={data.users ? `${Math.round((data.wallets_linked / data.users) * 100)}% of users` : undefined}
+            />
+            <Stat
+              label="Presale raised"
+              icon={Coins}
+              value={
+                <>
+                  {formatWei(data.presale?.raised_wei, 2)} <span className="stat-sub">USDT</span>
+                </>
+              }
               sub={`${formatNumber(data.presale?.contributors)} contributors`}
             />
           </div>
 
-          <h2>Activity</h2>
-          <div className="card row" style={{ justifyContent: "space-between" }}>
-            <div>
-              Earning is{" "}
-              {data.activity_paused ? (
-                <span className="badge red">paused</span>
-              ) : (
-                <span className="badge green">running</span>
-              )}
-              <div className="muted small" style={{ marginTop: 4 }}>
-                Pause stops all earning (spins, referrals, X, daily jobs). Snapshots can only be taken while paused.
+          <h2>Earning</h2>
+          <div className="card status-panel">
+            <div className={`status-orb ${data.activity_paused ? "off" : "on"}`}>
+              {data.activity_paused ? <Pause size={20} /> : <Activity size={20} />}
+            </div>
+            <div className="grow">
+              <div className="status-title">
+                Earning is {data.activity_paused ? "paused" : "live"}
+                {data.activity_paused ? (
+                  <span className="badge amber">Paused</span>
+                ) : (
+                  <span className="badge green">Running</span>
+                )}
+              </div>
+              <div className="muted small" style={{ marginTop: 2 }}>
+                Pausing stops all earning: spins, referrals, X rewards and daily jobs. Snapshots can only be taken
+                while paused.
               </div>
             </div>
             {canEdit &&

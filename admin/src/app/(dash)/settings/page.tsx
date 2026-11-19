@@ -7,7 +7,7 @@ import { api, useGet } from "@/lib/api";
 import { useAdmin } from "@/lib/auth";
 import { isHexAddress } from "@/lib/format";
 import type { Settings } from "@/lib/types";
-import { Addr, ConfirmButton, ErrorBox } from "@/components/ui";
+import { Addr, ConfirmButton, ErrorBox, Loading, PageHeader, SuccessBox } from "@/components/ui";
 
 type Kind = "text" | "int" | "address";
 const EDITABLE: { key: keyof Settings; kind: Kind }[] = [
@@ -22,15 +22,18 @@ const EDITABLE: { key: keyof Settings; kind: Kind }[] = [
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 
 function Badge({ ok, yes, no }: { ok: boolean; yes: string; no: string }) {
-  return <span className={`badge ${ok ? "green" : "red"}`}>{ok ? yes : no}</span>;
+  return <span className={`badge ${ok ? "green" : "amber"}`}>{ok ? yes : no}</span>;
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
   return (
-    <div className="card stack">
-      <h3>{title}</h3>
+    <section className="card stack">
+      <div>
+        <h3>{title}</h3>
+        {desc && <p className="muted small">{desc}</p>}
+      </div>
       {children}
-    </div>
+    </section>
   );
 }
 
@@ -105,7 +108,7 @@ function SettingsForm({
     <div className="row" style={{ alignItems: "flex-end" }}>
       <label className="field" style={{ flex: 1, minWidth: 260 }}>
         <span>
-          {label} <Badge ok={isSet} yes="set" no="not set" />
+          {label} <Badge ok={isSet} yes="Set" no="Not set" />
         </span>
         {isOwner && (
           <input
@@ -132,19 +135,19 @@ function SettingsForm({
     <form className="stack" onSubmit={save} style={{ maxWidth: 760 }}>
       {!isOwner && <div className="notice small">Only the owner can change settings.</div>}
 
-      <Section title="Telegram">
+      <Section title="Telegram" desc="Bot used for the mini app, reminders and login hand-off.">
         {secret("telegram_bot_token", "Bot token", s.telegram_bot_token_set)}
         <dl className="kv">
           <dt>Bot</dt>
           <dd>{s.telegram_bot_username ? `@${s.telegram_bot_username}` : <span className="muted">—</span>}</dd>
           <dt>Webhook</dt>
           <dd>
-            <Badge ok={s.telegram_webhook_ok} yes="ok" no="not set" />
+            <Badge ok={s.telegram_webhook_ok} yes="Connected" no="Not set" />
           </dd>
         </dl>
       </Section>
 
-      <Section title="X">
+      <Section title="X" desc="OAuth app for connecting users' X accounts.">
         {input("x_client_id", "Client ID")}
         {secret("x_client_secret", "Client secret", s.x_client_secret_set)}
         <div className="field">
@@ -153,12 +156,12 @@ function SettingsForm({
         </div>
       </Section>
 
-      <Section title="Chain">
+      <Section title="Chain" desc="Network the presale and airdrop run on.">
         {input("chain_id", "Chain ID", "56 = BSC mainnet, 97 = BSC testnet")}
         {input("rpc_url", "RPC URL")}
       </Section>
 
-      <Section title="Contracts">
+      <Section title="Contracts" desc="Deployed contract addresses the backend reads from.">
         {input("token_address", "Token address")}
         {input("presale_address", "Presale address", "saving reads USDT from the contract")}
         {input("presale_start_block", "Presale start block", "indexer starts here; filled automatically if empty")}
@@ -169,9 +172,9 @@ function SettingsForm({
         </div>
       </Section>
 
-      <Section title="Presale signer">
+      <Section title="Presale signer" desc="Signs whitelist allocations. The private key never leaves the server.">
         <div className="field">
-          <span>Backend signer address (signs whitelist allocations; key stays on the server)</span>
+          <span>Backend signer address</span>
           <Addr value={s.signer_address} full />
         </div>
         {isOwner && (
@@ -201,12 +204,15 @@ function SettingsForm({
         )}
       </Section>
 
-      {msg.ok && <div className="ok">{msg.ok}</div>}
+      <SuccessBox message={msg.ok} />
       <ErrorBox error={msg.err} />
-      {isOwner && (
-        <div>
-          <button className="btn primary" type="submit" disabled={busy || !count}>
-            <Save size={16} /> Save {count ? `(${count} changed)` : ""}
+      {isOwner && count > 0 && (
+        <div className="save-bar">
+          <span className="muted">
+            {count} unsaved {count === 1 ? "change" : "changes"}
+          </span>
+          <button className="btn primary" type="submit" disabled={busy}>
+            <Save size={16} /> {busy ? "Saving…" : "Save changes"}
           </button>
         </div>
       )}
@@ -220,9 +226,9 @@ export default function SettingsPage() {
   const [rotated, setRotated] = useState(false);
   return (
     <>
-      <h1>Settings</h1>
+      <PageHeader title="Settings" description="Integrations, chain and contract configuration. Only the owner can edit." />
       <ErrorBox error={error} />
-      {!data && !error && <p className="muted">Loading…</p>}
+      {!data && !error && <Loading />}
       {data && <SettingsForm key={JSON.stringify(data)} s={data}
           onSaved={reload}
           msg={msg}

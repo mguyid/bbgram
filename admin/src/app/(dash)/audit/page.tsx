@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useGet } from "@/lib/api";
-import { ErrorBox, ObjTable, Pager } from "@/components/ui";
+import { ErrorBox, Loading, ObjTable, PageHeader, Pager } from "@/components/ui";
 
 type AuditPage = { items: Record<string, unknown>[]; total?: number; page_size?: number };
 
@@ -15,12 +15,12 @@ export default function AuditPage() {
 
   return (
     <>
-      <h1>Audit log</h1>
+      <PageHeader title="Audit log" description="Every admin action, newest first." />
       <ErrorBox error={error} />
-      {loading && !data && <p className="muted">Loading…</p>}
+      {loading && !data && <Loading />}
       {data && (
         <>
-          <ObjTable rows={items} userLinkKeys={[]} empty="No entries." />
+          <ObjTable rows={items} userLinkKeys={[]} empty="No admin actions recorded yet." />
           <Pager page={page} total={total} pageSize={pageSize} count={items.length} onPage={setPage} />
         </>
       )}
