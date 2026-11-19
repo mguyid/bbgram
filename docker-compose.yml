@@ -1,22 +1,45 @@
-# Deployed with Coolify. Coolify fills every ${SERVICE_*} value itself:
-#   SERVICE_URL_<NAME>_<PORT>  public URL of a service (from the domain set in Coolify → Domains),
-#                              and the container port its proxy routes to
-#   SERVICE_USER_* / SERVICE_PASSWORD_64_*  random credentials, generated once and kept across redeploys
-# The only values to set by hand in Coolify are NEXT_PUBLIC_REOWN_PROJECT_ID (and DEV_MODE if ever needed).
+# Deployed with Coolify.
+#
+# The only values you ever set by hand (Coolify → Environment Variables), once per environment:
+#   API_URL, MINIAPP_URL, ADMIN_URL   public https URLs of the three apps (defaults below are staging)
+#   NEXT_PUBLIC_REOWN_PROJECT_ID      WalletConnect project id
+#   DEV_MODE                          optional, false by default
+# CORS is derived from MINIAPP_URL and ADMIN_URL by the API; nothing else to keep in sync.
+#   POSTGRES_PASSWORD, JWT_SECRET     required: the deploy fails if either is missing. Never change JWT_SECRET
+#                                     after launch: it encrypts stored secrets.
+#   POSTGRES_USER, POSTGRES_DB        optional, both default to babygrand
+# The SERVICE_URL_<NAME>_<PORT>: / lines only tell Coolify's proxy which container port to route to.
 # No `ports:` — Coolify's proxy routes traffic by domain.
+
+x-backend-env: &backend-env
+  # The API builds DATABASE_URL from these (URL-encoding the password).
+  POSTGRES_HOST: postgres
+  POSTGRES_USER: ${POSTGRES_USER:-babygrand}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+  POSTGRES_DB: ${POSTGRES_DB:-babygrand}
+  REDIS_URL: redis://redis:6379/0
+  JWT_SECRET: ${JWT_SECRET:?}
+  DEV_MODE: ${DEV_MODE:-false}
+  API_PUBLIC_URL: ${API_URL:-https://api-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+  MINIAPP_URL: ${MINIAPP_URL:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+  ADMIN_URL: ${ADMIN_URL:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+
+x-frontend-args: &frontend-args
+  NEXT_PUBLIC_API_URL: ${API_URL:-https://api-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+  NEXT_PUBLIC_REOWN_PROJECT_ID: ${NEXT_PUBLIC_REOWN_PROJECT_ID}
 
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${SERVICE_USER_POSTGRES}
-      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_64_POSTGRES}
-      POSTGRES_DB: babygrand
+      POSTGRES_USER: ${POSTGRES_USER:-babygrand}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:-babygrand}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d babygrand"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       retries: 10
 
@@ -33,15 +56,8 @@ services:
     restart: unless-stopped
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
     environment:
+      <<: *backend-env
       SERVICE_URL_API_8000: /
-      DATABASE_URL: postgresql+asyncpg://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_64_POSTGRES}@postgres:5432/babygrand
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
-      DEV_MODE: ${DEV_MODE:-false}
-      API_PUBLIC_URL: ${SERVICE_URL_API_8000}
-      MINIAPP_URL: ${SERVICE_URL_MINIAPP_3000}
-      ADMIN_URL: ${SERVICE_URL_ADMIN_3001}
-      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000:-},${SERVICE_URL_ADMIN_3001:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -51,23 +67,14 @@ services:
     restart: unless-stopped
     command: python -m app.worker
     environment:
-      DATABASE_URL: postgresql+asyncpg://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_64_POSTGRES}@postgres:5432/babygrand
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
-      DEV_MODE: ${DEV_MODE:-false}
-      API_PUBLIC_URL: ${SERVICE_URL_API_8000}
-      MINIAPP_URL: ${SERVICE_URL_MINIAPP_3000}
-      ADMIN_URL: ${SERVICE_URL_ADMIN_3001}
-      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000},${SERVICE_URL_ADMIN_3001}
+      <<: *backend-env
     depends_on:
       api: { condition: service_started }
 
   miniapp:
     build:
       context: ./miniapp
-      args:
-        NEXT_PUBLIC_API_URL: ${SERVICE_URL_API_8000}
-        NEXT_PUBLIC_REOWN_PROJECT_ID: ${NEXT_PUBLIC_REOWN_PROJECT_ID}
+      args: *frontend-args
     restart: unless-stopped
     environment:
       SERVICE_URL_MINIAPP_3000: /
@@ -75,9 +82,7 @@ services:
   admin:
     build:
       context: ./admin
-      args:
-        NEXT_PUBLIC_API_URL: ${SERVICE_URL_API_8000}
-        NEXT_PUBLIC_REOWN_PROJECT_ID: ${NEXT_PUBLIC_REOWN_PROJECT_ID}
+      args: *frontend-args
     restart: unless-stopped
     environment:
       SERVICE_URL_ADMIN_3001: /
