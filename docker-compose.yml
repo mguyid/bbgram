@@ -41,7 +41,7 @@ services:
       API_PUBLIC_URL: ${SERVICE_URL_API_8000}
       MINIAPP_URL: ${SERVICE_URL_MINIAPP_3000}
       ADMIN_URL: ${SERVICE_URL_ADMIN_3001}
-      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000},${SERVICE_URL_ADMIN_3001}
+      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000:-},${SERVICE_URL_ADMIN_3001:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
