@@ -3,6 +3,8 @@
 #                              and the container port its proxy routes to
 #   SERVICE_USER_* / SERVICE_PASSWORD_64_*  random credentials, generated once and kept across redeploys
 # The only values to set by hand in Coolify are NEXT_PUBLIC_REOWN_PROJECT_ID (and DEV_MODE if ever needed).
+# API_PUBLIC_URL, MINIAPP_URL and ADMIN_URL (api + worker) default to the staging domains; set them in Coolify to
+# override. The SERVICE_URL_* values come through empty in those containers, so they are not used there.
 # No `ports:` — Coolify's proxy routes traffic by domain.
 
 services:
@@ -38,10 +40,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
       DEV_MODE: ${DEV_MODE:-false}
-      API_PUBLIC_URL: ${SERVICE_URL_API_8000}
-      MINIAPP_URL: ${SERVICE_URL_MINIAPP_3000:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
-      ADMIN_URL: ${SERVICE_URL_ADMIN_3001:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
-      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz},${SERVICE_URL_ADMIN_3001:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-https://api-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      MINIAPP_URL: ${MINIAPP_URL:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      ADMIN_URL: ${ADMIN_URL:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      CORS_ORIGINS: ${MINIAPP_URL:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz},${ADMIN_URL:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -55,10 +57,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
       DEV_MODE: ${DEV_MODE:-false}
-      API_PUBLIC_URL: ${SERVICE_URL_API_8000}
-      MINIAPP_URL: ${SERVICE_URL_MINIAPP_3000:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
-      ADMIN_URL: ${SERVICE_URL_ADMIN_3001:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
-      CORS_ORIGINS: ${SERVICE_URL_MINIAPP_3000:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz},${SERVICE_URL_ADMIN_3001:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-https://api-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      MINIAPP_URL: ${MINIAPP_URL:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      ADMIN_URL: ${ADMIN_URL:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
+      CORS_ORIGINS: ${MINIAPP_URL:-https://miniapp-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz},${ADMIN_URL:-https://admin-qm0jxwdghtdbt3ocbzlcu57f.metablockstaging.xyz}
     depends_on:
       api: { condition: service_started }
 
