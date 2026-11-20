@@ -1,13 +1,11 @@
-"""Runtime settings, signer rotation, contract action log (interfaces.md 2a)."""
+"""Runtime settings and contract action log (interfaces.md 2a)."""
 
-from eth_account import Account
-from eth_account.messages import encode_defunct
 from sqlalchemy import select
 
 from app import chain, runtime
 from app.db import SessionLocal
 from app.models import RuntimeSetting
-from tests.conftest import PRESALE, SIGNER, admin_login, login, set_runtime
+from tests.conftest import PRESALE_WALLET, admin_login, login, set_runtime
 
 
 async def raw_setting(key: str) -> str | None:
@@ -29,18 +27,17 @@ async def test_settings_round_trip_masked_and_encrypted(client, admin_headers):
     assert got["rpc_url"] == "https://rpc.example" and got["token_address"] == token  # checksummed
     assert got["x_redirect_uri"] == "https://api.example.com/x/callback"
     assert got["telegram_bot_token_set"] is True and got["telegram_bot_username"] == "BabyGrandBot"
-    assert got["presale_address"] == PRESALE and got["signer_address"] == SIGNER.address
+    assert got["presale_wallet"] == PRESALE_WALLET and got["multisend_address"] == ""
     assert set(got) == {
         "telegram_bot_token_set", "telegram_bot_username", "telegram_webhook_ok", "x_client_id",
         "x_client_secret_set", "x_redirect_uri", "chain_id", "rpc_url", "usdt_address", "token_address",
-        "presale_address", "presale_start_block", "airdrop_address", "signer_address",
+        "presale_wallet", "presale_start_block", "airdrop_address", "multisend_address",
     }
 
     # encrypted at rest: raw DB value differs from the plaintext and decrypts back
     raw = await raw_setting("x_client_secret")
     assert raw and raw != "very-secret-value" and runtime.decrypt(raw) == "very-secret-value"
     assert await raw_setting("x_client_id") == "cid"
-    assert runtime.decrypt(await raw_setting("signer_key")) == SIGNER.key.hex()
 
     # empty string clears; bad input is rejected
     r = await client.put("/admin-api/settings", headers=admin_headers, json={"x_client_secret": ""})
@@ -59,7 +56,6 @@ async def test_settings_owner_only(client, admin_headers):
     assert (await client.get("/admin-api/settings", headers=staff)).status_code == 200
     for h in (staff, viewer):
         assert (await client.put("/admin-api/settings", headers=h, json={"x_client_id": "x"})).status_code == 403
-        assert (await client.post("/admin-api/settings/rotate-signer", headers=h)).status_code == 403
 
 
 async def test_bot_token_save_sets_webhook(client, admin_headers, sent):
@@ -92,68 +88,54 @@ async def test_dev_mode_works_without_bot_token(client, admin_headers):
     assert me["telegram_id"] == 5
 
 
-async def test_presale_address_save_reads_chain(client, admin_headers, monkeypatch):
-    usdt = "0x" + "55" * 20
+async def test_presale_wallet_save_sets_start_block(client, admin_headers, monkeypatch):
     calls = []
 
-    async def fake_setup(rpc_url, presale):
-        calls.append((rpc_url, presale))
-        return usdt, 1234
+    async def fake_block(rpc_url):
+        calls.append(rpc_url)
+        return 1234
 
-    monkeypatch.setattr(chain, "read_presale_setup", fake_setup)
-    new_presale = "0x" + "77" * 20
+    monkeypatch.setattr(chain, "current_block", fake_block)
+    wallet = "0x" + "77" * 20
+    usdt = "0x" + "55" * 20
     r = await client.put("/admin-api/settings", headers=admin_headers,
-                         json={"rpc_url": "https://rpc.example", "presale_address": new_presale})
+                         json={"rpc_url": "https://rpc.example", "presale_wallet": wallet, "usdt_address": usdt,
+                               "multisend_address": "0x" + "66" * 20})
     got = r.json()
-    assert calls == [("https://rpc.example", new_presale)]
-    assert got["usdt_address"] == usdt and got["presale_start_block"] == 1234
-    # an explicit start block is kept
+    assert r.status_code == 200, r.text
+    assert calls == ["https://rpc.example"] and got["presale_start_block"] == 1234
+    assert got["presale_wallet"].lower() == wallet and got["usdt_address"].lower() == usdt
+    assert got["multisend_address"].lower() == "0x" + "66" * 20
+    # an existing start block is kept; an explicit one wins
+    r = await client.put("/admin-api/settings", headers=admin_headers, json={"presale_wallet": wallet})
+    assert r.json()["presale_start_block"] == 1234 and len(calls) == 1
     r = await client.put("/admin-api/settings", headers=admin_headers,
-                         json={"presale_address": new_presale, "presale_start_block": 99})
+                         json={"presale_wallet": wallet, "presale_start_block": 99})
     assert r.json()["presale_start_block"] == 99
+    assert (await client.put("/admin-api/settings", headers=admin_headers,
+                             json={"presale_wallet": "nope"})).status_code == 400
 
-    async def failing(rpc_url, presale):
+    async def failing(rpc_url):
         raise ConnectionError("down")
 
-    monkeypatch.setattr(chain, "read_presale_setup", failing)
-    r = await client.put("/admin-api/settings", headers=admin_headers, json={"presale_address": new_presale})
+    monkeypatch.setattr(chain, "current_block", failing)
+    await client.put("/admin-api/settings", headers=admin_headers, json={"presale_start_block": ""})
+    r = await client.put("/admin-api/settings", headers=admin_headers, json={"presale_wallet": wallet})
     assert r.status_code == 400
 
 
-async def test_rotate_signer_signature_recovers_to_new_address(client, admin_headers):
-    h, _ = await login(client, 1, "alice")
-    acct = Account.create()
-    n = (await client.get("/api/wallet/nonce", headers=h)).json()
-    sig = "0x" + acct.sign_message(encode_defunct(text=n["message"])).signature.hex()
-    await client.post("/api/wallet/link", headers=h,
-                      json={"address": acct.address, "signature": sig, "nonce": n["nonce"]})
-    await client.post("/admin-api/presale/whitelist", headers=admin_headers, json={"wallet_address": acct.address})
-
-    r = await client.post("/admin-api/settings/rotate-signer", headers=admin_headers)
-    new_address = r.json()["signer_address"]
-    assert new_address != SIGNER.address
-    assert (await client.get("/admin-api/settings", headers=admin_headers)).json()["signer_address"] == new_address
-    s = (await client.get("/api/presale/signature", headers=h)).json()
-    assert chain.recover_whitelist_signer(97, PRESALE, acct.address, int(s["max_allocation_wei"]),
-                                          s["signature"]) == new_address
-    log = (await client.get("/admin-api/audit-log", headers=admin_headers)).json()["items"]
-    assert log[0]["action"] == "settings.rotate_signer" and log[0]["target"] == new_address
-
-
-async def test_signer_generated_on_first_need(client, admin_headers):
-    async with SessionLocal() as s:
-        await runtime.save(s, {"signer_key": ""})
-        await s.commit()
-    runtime.invalidate()
-    address = (await client.get("/admin-api/settings", headers=admin_headers)).json()["signer_address"]
-    assert address and address != SIGNER.address
-    assert (await client.get("/admin-api/settings", headers=admin_headers)).json()["signer_address"] == address
+async def test_usdt_defaults_to_bsc_on_mainnet(client, admin_headers):
+    got = (await client.get("/admin-api/settings", headers=admin_headers)).json()
+    assert got["usdt_address"] == ""
+    assert (await runtime.get()).usdt == ""  # testnet (97) needs it set
+    await set_runtime(chain_id="56")
+    assert (await runtime.get()).usdt == runtime.BSC_USDT
 
 
 async def test_contracts_log(client, admin_headers):
     viewer = await admin_login(client, "viewer@example.com", "viewer")
     staff = await admin_login(client, "staff@example.com", "admin")
-    body = {"contract": "presale", "method": "setPrice", "args": ["100000000000000000000"],
+    body = {"contract": "multisend", "method": "send", "args": ["0x" + "12" * 20],
             "tx_hash": "0x" + "ab" * 32}
     assert (await client.post("/admin-api/contracts/log", headers=viewer, json=body)).status_code == 403
     assert (await client.post("/admin-api/contracts/log", headers=staff,
@@ -162,7 +144,7 @@ async def test_contracts_log(client, admin_headers):
     item = (await client.get("/admin-api/audit-log", headers=admin_headers)).json()["items"][0]
     assert item["action"] == "contract.call" and item["admin_email"] == "staff@example.com"
     assert item["target"] == body["tx_hash"]
-    assert item["details"] == {"contract": "presale", "method": "setPrice", "args": ["100000000000000000000"]}
+    assert item["details"] == {"contract": "multisend", "method": "send", "args": ["0x" + "12" * 20]}
 
 
 async def test_web3_client_shared_per_rpc_url():

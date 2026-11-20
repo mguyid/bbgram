@@ -45,7 +45,8 @@ function ConfigForm({ initial, onSaved }: { initial: Record<string, Value>; onSa
   const [busy, setBusy] = useState(false);
 
   const extra = Object.keys(initial)
-    .filter((k) => !KEYS.some((d) => d.key === k))
+    // presale_* keys are edited on the Presale page.
+    .filter((k) => !KEYS.some((d) => d.key === k) && !k.startsWith("presale_"))
     .map((k) => ({ key: k, kind: kindOf(initial[k]), label: k, hint: undefined, group: "Other" as Group }));
   const fields = [...KEYS, ...extra];
   const changed = fields.filter((f) => values[f.key] !== initial[f.key]);

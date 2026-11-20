@@ -212,15 +212,22 @@ class AirdropProof(Base):
     proof: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
 
 
-class PresaleWhitelist(Base):
-    __tablename__ = "presale_whitelist"
+class PresaleAllocation(Base):
+    """One row per paying wallet, frozen when the admin closes the presale (the presale snapshot).
+    `credited_tx` is set once the team has sent the tokens after launch."""
+    __tablename__ = "presale_allocations"
     wallet_address: Mapped[str] = mapped_column(String(42), primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    added_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
+    contributed_wei: Mapped[Decimal] = mapped_column(WEI, nullable=False)
+    counted_wei: Mapped[Decimal] = mapped_column(WEI, nullable=False)
+    tokens_wei: Mapped[Decimal] = mapped_column(WEI, nullable=False)
+    credited_tx: Mapped[str | None] = mapped_column(String(66))
+    credited_at: Mapped[datetime | None] = ts()
     created_at: Mapped[datetime] = created()
 
 
 class PresaleContribution(Base):
+    """A USDT transfer into the presale wallet (indexed from chain; `total_wei` is unused and kept 0)."""
     __tablename__ = "presale_contributions"
     __table_args__ = (UniqueConstraint("tx_hash", "log_index", name="uq_presale_contributions_log"),)
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)

@@ -32,10 +32,11 @@ export type Settings = {
   rpc_url: string | null;
   usdt_address: string | null;
   token_address: string | null;
-  presale_address: string | null;
+  /** The address that receives presale USDT (there is no presale contract). */
+  presale_wallet: string | null;
   presale_start_block: number | null;
   airdrop_address: string | null;
-  signer_address: string | null;
+  multisend_address: string | null;
 };
 
 export type TelegramStatus = {

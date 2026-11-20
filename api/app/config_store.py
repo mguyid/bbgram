@@ -22,7 +22,18 @@ DEFAULTS: dict[str, Any] = {
     "risk_threshold": 70,
     "referral_burst_n": 10,
     "referral_burst_minutes": 60,
+    # Presale terms (no contract: buyers pay USDT straight into the presale wallet).
+    "presale_tokens_per_usdt": "",  # decimal string, "100" = $0.01 per token
+    "presale_hard_cap_usdt": 0,  # whole USDT, 0 = no cap
+    "presale_min_usdt": 10,
+    "presale_max_usdt": 2500,  # per wallet, cumulative
+    "presale_start_at": "",  # ISO-8601 UTC
+    "presale_end_at": "",
+    "presale_paused": False,
+    "presale_closed_at": "",  # set only by POST /admin-api/presale/close
 }
+
+PRESALE_KEYS = {k for k in DEFAULTS if k.startswith("presale_")}
 
 
 async def get_config(session: AsyncSession) -> dict[str, Any]:

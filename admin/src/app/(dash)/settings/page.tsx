@@ -12,9 +12,9 @@ import { Addr, ConfirmButton, ErrorBox, Loading, PageHeader, SuccessBox } from "
 const TABS = [
   { key: "telegram", label: "Telegram", desc: "Bot for the mini app, reminders and login hand-off." },
   { key: "x", label: "X", desc: "OAuth app for connecting users' X accounts." },
-  { key: "chain", label: "Chain", desc: "Network the presale and airdrop run on." },
+  { key: "chain", label: "Chain", desc: "Network the presale, token and airdrop run on." },
+  { key: "presale", label: "Presale", desc: "Wallet that receives presale USDT. There is no presale contract." },
   { key: "contracts", label: "Contracts", desc: "Deployed contract addresses the backend reads from." },
-  { key: "signer", label: "Presale signer", desc: "Signs whitelist allocations. The private key never leaves the server." },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 
@@ -275,45 +275,6 @@ function TelegramTab({ s, onSaved }: { s: Settings; onSaved: () => void }) {
   );
 }
 
-// ---------- Signer ----------
-
-function SignerTab({ s, onSaved }: { s: Settings; onSaved: () => void }) {
-  const isOwner = useAdmin()?.role === "owner";
-  const [rotated, setRotated] = useState(false);
-  return (
-    <div className="stack">
-      <div className="field">
-        <span>Backend signer address</span>
-        <Addr value={s.signer_address} full />
-      </div>
-      {isOwner && (
-        <div>
-          <ConfirmButton
-            label={
-              <>
-                <RefreshCw size={14} /> Rotate signer
-              </>
-            }
-            title="Rotate the presale signer?"
-            message="A new key is generated. Existing whitelist signatures stop working until you call setSigner with the new address on the Contracts page."
-            confirmLabel="Rotate"
-            onConfirm={async () => {
-              await api("/settings/rotate-signer", { method: "POST" });
-              setRotated(true);
-              onSaved();
-            }}
-          />
-        </div>
-      )}
-      {rotated && (
-        <div className="notice small">
-          Signer rotated. Now set it on chain: <Link href="/contracts">Contracts → Presale → Set signer</Link>.
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ---------- page ----------
 
 function TabBody({ tab, s, onSaved }: { tab: TabKey; s: Settings; onSaved: () => void }) {
@@ -352,27 +313,51 @@ function TabBody({ tab, s, onSaved }: { tab: TabKey; s: Settings; onSaved: () =>
           onSaved={onSaved}
           fields={[
             { key: "token_address", label: "Token address", kind: "address" },
-            { key: "presale_address", label: "Presale address", kind: "address", hint: "saving reads USDT from the contract" },
+            { key: "airdrop_address", label: "Airdrop address", kind: "address" },
+            {
+              key: "multisend_address",
+              label: "Multisend address",
+              kind: "address",
+              hint: "used to send presale buyers their tokens in batches",
+            },
+          ]}
+        >
+          <p className="muted small" style={{ margin: 0 }}>
+            On-chain values and owner actions are on the <Link href="/contracts">Contracts</Link> page.
+          </p>
+        </FieldsForm>
+      );
+    case "presale":
+      return (
+        <FieldsForm
+          s={s}
+          onSaved={onSaved}
+          fields={[
+            {
+              key: "presale_wallet",
+              label: "Presale wallet",
+              kind: "address",
+              hint: "the address that receives presale USDT",
+            },
+            {
+              key: "usdt_address",
+              label: "USDT address",
+              kind: "address",
+              hint: "leave empty on BSC mainnet to use the official USDT; required on testnet",
+            },
             {
               key: "presale_start_block",
               label: "Presale start block",
               kind: "int",
               hint: "indexer starts here; filled automatically if empty",
             },
-            { key: "airdrop_address", label: "Airdrop address", kind: "address" },
           ]}
         >
-          <div className="field">
-            <span>USDT address (read from the presale contract)</span>
-            <Addr value={s.usdt_address} full />
-          </div>
           <p className="muted small" style={{ margin: 0 }}>
-            On-chain values and owner actions are on the <Link href="/contracts">Contracts</Link> page.
+            Price, limits, dates and the snapshot are on the <Link href="/presale">Presale</Link> page.
           </p>
         </FieldsForm>
       );
-    case "signer":
-      return <SignerTab s={s} onSaved={onSaved} />;
   }
 }
 

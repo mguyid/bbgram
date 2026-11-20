@@ -3,17 +3,17 @@
 // Contracts page body (plan §3.10). Loaded with next/dynamic so the wallet libraries stay out of other pages.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { formatUnits, isAddress, parseUnits, type Abi, type Address, type Hex, type PublicClient } from "viem";
+import { isAddress, parseUnits, type Abi, type Address, type Hex, type PublicClient } from "viem";
 import { api } from "@/lib/api";
 import { formatWei } from "@/lib/format";
 import type { Airdrop, Settings } from "@/lib/types";
 import { Addr, ErrorBox } from "@/components/ui";
-import { airdropAbi, erc20Abi, presaleAbi, tokenAbi } from "./abi";
+import { airdropAbi, erc20Abi, tokenAbi } from "./abi";
 import { chainFor, explorerTx, initWallet, makePublicClient, plainError, projectId, sendTx } from "./wallet";
 
-type Key = "token" | "presale" | "airdrop";
+type Key = "token" | "airdrop";
 type V = Record<string, unknown>;
-type Values = { now: number; token: V; presale: V; airdrop: V };
+type Values = { now: number; token: V; airdrop: V };
 type Tx =
   | { phase: "idle" }
   | { phase: "wallet" }
@@ -21,7 +21,7 @@ type Tx =
   | { phase: "confirmed"; hash: string; logError?: string }
   | { phase: "failed"; reason: string; hash?: string };
 
-const ABIS: Record<Key, Abi> = { token: tokenAbi, presale: presaleAbi, airdrop: airdropAbi };
+const ABIS: Record<Key, Abi> = { token: tokenAbi, airdrop: airdropAbi };
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ZERO32 = "0x" + "0".repeat(64);
 
@@ -50,12 +50,6 @@ function datetime(v: string, label: string): bigint {
   if (!v || Number.isNaN(t)) throw new Error(`${label}: pick a date and time.`);
   return BigInt(Math.floor(t / 1000));
 }
-function days(v: string, label: string): bigint {
-  const n = Number(v);
-  if (v.trim() === "" || !Number.isFinite(n) || n < 0) throw new Error(`${label}: enter days ≥ 0.`);
-  return BigInt(Math.round(n * 86400));
-}
-const units = (v: unknown) => (big(v) === undefined ? "" : formatUnits(big(v)!, 18));
 const bpsToPercent = (v: unknown) => (big(v) === undefined ? "" : String(num(v) / 100));
 function toLocalInput(sec: unknown): string {
   const s = num(sec);
@@ -84,30 +78,21 @@ async function readAll(client: PublicClient, s: Settings, account?: Address): Pr
     return Object.fromEntries(names.map((n, i) => [n, vals[i]])) as V;
   };
   const own = ["owner", "pendingOwner"];
-  const [block, token, presale, airdrop] = await Promise.all([
+  const [block, token, airdrop] = await Promise.all([
     client.getBlock(),
     group(s.token_address, tokenAbi, [
       ...own,
       ...["name", "symbol", "totalSupply", "treasury", "taxWallet", "buyTaxBps", "sellTaxBps", "socials"],
     ]),
-    group(s.presale_address, presaleAbi, [
-      ...own,
-      ...["paused", "usdt", "token", "signer", "tokensPerUsdt", "hardCapWei", "minWei", "maxWei", "startTime"],
-      ...["endTime", "totalRaised", "totalTokensSold", "claimEnabled", "claimStart", "unlockBps", "vestingDuration"],
-    ]),
     group(s.airdrop_address, airdropAbi, [...own, "token", "merkleRoot", "deadline"]),
   ]);
-  const usdt = str(presale.usdt) || s.usdt_address;
-  const [presaleUsdt, presaleTokens, airdropTokens, myTokens] = await Promise.all([
-    call(usdt, erc20Abi, "balanceOf", [s.presale_address]),
-    call(s.token_address, erc20Abi, "balanceOf", [s.presale_address]),
+  const [airdropTokens, myTokens] = await Promise.all([
     call(s.token_address, erc20Abi, "balanceOf", [s.airdrop_address]),
     account ? call(s.token_address, erc20Abi, "balanceOf", [account]) : undefined,
   ]);
   return {
     now: Number(block.timestamp),
     token: { ...token, myBalance: myTokens },
-    presale: { ...presale, usdtBalance: presaleUsdt, tokenBalance: presaleTokens },
     airdrop: { ...airdrop, tokenBalance: airdropTokens },
   };
 }
@@ -146,7 +131,7 @@ type ActionProps = {
   blocked?: string | false;
   confirm?: string;
   hint?: ReactNode;
-  /** Extra controls that can fill fields (e.g. "use backend signer"). */
+  /** Extra controls that can fill fields (e.g. pick a built airdrop). */
   helpers?: (set: (name: string, value: string) => void) => ReactNode;
   danger?: boolean;
 };
@@ -297,7 +282,6 @@ function KV({ rows }: { rows: [string, ReactNode][] }) {
 const A = (v: unknown) => (str(v) && str(v) !== ZERO ? <Addr value={str(v)} full /> : <span className="muted">none</span>);
 const W = (v: unknown) => (big(v) === undefined ? undefined : formatWei(big(v)!.toString()));
 const P = (v: unknown) => (big(v) === undefined ? undefined : `${num(v) / 100}%`);
-const B = (v: unknown) => (typeof v === "boolean" ? (v ? "yes" : "no") : undefined);
 
 // ---------- sections ----------
 
@@ -361,7 +345,6 @@ function TokenSection() {
           ["Buy tax", P(t.buyTaxBps)],
           ["Sell tax", P(t.sellTaxBps)],
           ["Socials", str(t.socials)],
-          ["Balance of presale", W(values.presale.tokenBalance)],
           ["Balance of airdrop", W(values.airdrop.tokenBalance)],
           ["Balance of connected wallet", W(t.myBalance)],
         ]}
@@ -429,16 +412,6 @@ function TokenSection() {
           hint="Register the PancakeSwap pair so buy/sell tax applies."
         />
         <Action
-          title="Fund presale"
-          contract="token"
-          method="transfer"
-          who="any"
-          blocked={!addresses.presale && "Presale address is not set in Settings."}
-          fields={[{ name: "n", label: "Tokens", placeholder: "1000000" }]}
-          build={(v) => [addresses.presale as Address, amount(v.n, "Tokens")]}
-          hint="Token transfer from the connected wallet to the presale contract."
-        />
-        <Action
           title="Fund airdrop"
           contract="token"
           method="transfer"
@@ -449,201 +422,6 @@ function TokenSection() {
           hint="Token transfer from the connected wallet to the airdrop contract."
         />
         <Ownership contract="token" />
-      </div>
-    </>
-  );
-}
-
-function PresaleSection() {
-  const { values, settings, addresses } = useCtx();
-  const p = values.presale;
-  const now = values.now;
-  const start = num(p.startTime);
-  const end = num(p.endTime);
-  const paused = p.paused === true;
-  const editable = start === 0 || now < start || paused;
-  const claimEnabled = p.claimEnabled === true;
-  const tokenSet = !!str(p.token) && str(p.token) !== ZERO;
-  const status = paused
-    ? "paused"
-    : start === 0 || now < start
-      ? "not started"
-      : now < end
-        ? "live"
-        : "ended";
-  const notEditable = !editable && "Not editable: the presale is live or ended and not paused. Pause it first.";
-  const price = big(p.tokensPerUsdt);
-  const signer = str(p.signer);
-
-  return (
-    <>
-      <KV
-        rows={[
-          ["Address", A(addresses.presale)],
-          ["Status", <span key="s" className={`badge${status === "live" ? " green" : status === "paused" ? " red" : ""}`}>{status}</span>],
-          ["Owner", A(p.owner)],
-          ["Pending owner", A(p.pendingOwner)],
-          ["USDT", A(p.usdt)],
-          ["Token", A(p.token)],
-          [
-            "Signer",
-            <span key="sg" className="row">
-              {A(signer)}
-              {signer && settings.signer_address && (
-                <span className={`badge ${same(signer, settings.signer_address) ? "green" : "red"}`}>
-                  {same(signer, settings.signer_address) ? "matches backend" : "differs from backend"}
-                </span>
-              )}
-            </span>,
-          ],
-          [
-            "Price",
-            price
-              ? `${formatWei(price.toString())} tokens per 1 USDT ($${(1 / Number(formatUnits(price, 18))).toPrecision(4)} per token)`
-              : "not set",
-          ],
-          ["Hard cap", W(p.hardCapWei) && `${W(p.hardCapWei)} USDT`],
-          ["Per-wallet min / max", W(p.minWei) && `${W(p.minWei)} / ${W(p.maxWei)} USDT`],
-          ["Start", showTime(p.startTime)],
-          ["End", showTime(p.endTime)],
-          ["Total raised", W(p.totalRaised) && `${W(p.totalRaised)} USDT`],
-          ["Tokens sold", W(p.totalTokensSold)],
-          ["USDT balance", W(p.usdtBalance)],
-          ["Token balance", W(p.tokenBalance)],
-          ["Claim enabled", B(p.claimEnabled)],
-          ["Claim start", showTime(p.claimStart)],
-          ["Initial unlock", P(p.unlockBps)],
-          ["Vesting", big(p.vestingDuration) !== undefined ? `${num(p.vestingDuration) / 86400} days` : undefined],
-        ]}
-      />
-      <div className="notice small">
-        Price, hard cap and per-wallet limits can be changed only while the presale is not started or is paused (
-        {editable ? "editable now" : "not editable now"}). Unlock settings lock once claim is enabled.
-      </div>
-      <div className="actions">
-        <Action
-          title={paused ? "Unpause" : "Pause"}
-          contract="presale"
-          method={paused ? "unpause" : "pause"}
-          danger={!paused}
-          hint={paused ? "Reopens buying (within start/end)." : "Stops buying immediately. Claims still work."}
-        />
-        <Action
-          title="Set price"
-          contract="presale"
-          method="setPrice"
-          blocked={notEditable}
-          fields={[{ name: "n", label: "Tokens per 1 USDT", initial: units(p.tokensPerUsdt), placeholder: "100" }]}
-          build={(v) => [amount(v.n, "Price")]}
-          hint="Example: $0.01 per token = 100 tokens per USDT. Existing buyers keep their price."
-        />
-        <Action
-          title="Set hard cap"
-          contract="presale"
-          method="setHardCap"
-          blocked={notEditable}
-          fields={[{ name: "n", label: "Hard cap (USDT)", initial: units(p.hardCapWei) }]}
-          build={(v) => [amount(v.n, "Hard cap")]}
-          hint="Must be ≥ total raised."
-        />
-        <Action
-          title="Set limits"
-          contract="presale"
-          method="setLimits"
-          blocked={notEditable}
-          fields={[
-            { name: "min", label: "Min per wallet (USDT)", initial: units(p.minWei) },
-            { name: "max", label: "Max per wallet (USDT)", initial: units(p.maxWei) },
-          ]}
-          build={(v) => [amount(v.min, "Min"), amount(v.max, "Max")]}
-        />
-        <Action
-          title="Set times"
-          contract="presale"
-          method="setTimes"
-          fields={[
-            { name: "s", label: "Start (your local time)", type: "datetime-local", initial: toLocalInput(p.startTime) },
-            { name: "e", label: "End (your local time)", type: "datetime-local", initial: toLocalInput(p.endTime) },
-          ]}
-          build={(v) => [datetime(v.s, "Start"), datetime(v.e, "End")]}
-        />
-        <Action
-          title="Set signer"
-          contract="presale"
-          method="setSigner"
-          fields={[{ name: "a", label: "Signer address", initial: signer && signer !== ZERO ? signer : "" }]}
-          build={(v) => [address(v.a, "Signer")]}
-          hint="Must be the backend signer, or whitelist signatures fail."
-          helpers={(set) => (
-            <button
-              type="button"
-              className="btn"
-              disabled={!settings.signer_address}
-              onClick={() => set("a", settings.signer_address ?? "")}
-            >
-              Use backend signer
-            </button>
-          )}
-        />
-        <Action
-          title="Set token"
-          contract="presale"
-          method="setToken"
-          blocked={tokenSet && "Token is already set (once only)."}
-          fields={[{ name: "a", label: "Token address", initial: addresses.token ?? "" }]}
-          build={(v) => [address(v.a, "Token")]}
-          confirm="Set the token address? This can be done only once."
-          hint="Once only."
-        />
-        <Action
-          title="Set unlock"
-          contract="presale"
-          method="setUnlock"
-          blocked={claimEnabled && "Locked: claim is already enabled."}
-          fields={[
-            { name: "p", label: "Initial unlock %", initial: bpsToPercent(p.unlockBps) },
-            {
-              name: "d",
-              label: "Vesting duration (days)",
-              initial: big(p.vestingDuration) !== undefined ? String(num(p.vestingDuration) / 86400) : "",
-            },
-          ]}
-          build={(v) => [percentToBps(v.p, "Unlock"), days(v.d, "Vesting")]}
-          hint="100% and 0 days = full unlock at claim start."
-        />
-        <Action
-          title="Enable claim"
-          contract="presale"
-          method="enableClaim"
-          blocked={(claimEnabled && "Claim is already enabled.") || (!tokenSet && "Set the token first.")}
-          confirm="Enable claiming now? This is irreversible and locks the unlock settings. Make sure the presale holds enough tokens."
-          hint="Irreversible. Fund the presale with tokens first."
-          danger
-        />
-        <Action
-          title="Withdraw USDT"
-          contract="presale"
-          method="withdrawUsdt"
-          fields={[{ name: "to", label: "To address", placeholder: "0x…" }]}
-          build={(v) => [address(v.to, "To")]}
-          confirm="Withdraw the whole USDT balance of the presale?"
-          hint="Sends the whole USDT balance."
-          danger
-        />
-        <Action
-          title="Withdraw tokens"
-          contract="presale"
-          method="withdrawTokens"
-          blocked={!tokenSet && "Token is not set."}
-          fields={[
-            { name: "to", label: "To address", placeholder: "0x…" },
-            { name: "n", label: "Tokens" },
-          ]}
-          build={(v) => [address(v.to, "To"), amount(v.n, "Tokens")]}
-          confirm="Withdraw tokens from the presale?"
-          danger
-        />
-        <Ownership contract="presale" />
       </div>
     </>
   );
@@ -753,13 +531,12 @@ export default function ContractsAdmin({
   const addresses: Record<Key, string | null> = useMemo(
     () => ({
       token: settings.token_address || null,
-      presale: settings.presale_address || null,
       airdrop: settings.airdrop_address || null,
     }),
     [settings],
   );
   const [initialRoot] = useState(() => new URLSearchParams(window.location.search).get("root") ?? "");
-  const [tab, setTab] = useState<Key>(initialRoot ? "airdrop" : "presale");
+  const [tab, setTab] = useState<Key>(initialRoot ? "airdrop" : "token");
   const [account, setAccount] = useState<Address | undefined>();
   const [values, setValues] = useState<Values | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
@@ -830,7 +607,7 @@ export default function ContractsAdmin({
                 </div>
                 {account && (
                   <div className="row small">
-                    {(["token", "presale", "airdrop"] as Key[]).map((k) => (
+                    {(["token", "airdrop"] as Key[]).map((k) => (
                       <span key={k} className={`badge ${same(account, ownerOf(k)) ? "green" : "red"}`}>
                         {k}: {same(account, ownerOf(k)) ? "owner" : "not owner"}
                       </span>
@@ -864,7 +641,7 @@ export default function ContractsAdmin({
       </div>
       <ErrorBox error={readError} />
       <div className="tabs">
-        {(["presale", "token", "airdrop"] as Key[]).map((k) => (
+        {(["token", "airdrop"] as Key[]).map((k) => (
           <button key={k} type="button" className={`tab${tab === k ? " active" : ""}`} onClick={() => setTab(k)}>
             {k[0].toUpperCase() + k.slice(1)}
           </button>
@@ -878,7 +655,6 @@ export default function ContractsAdmin({
         <CtxObj.Provider value={{ settings, values, account, canEdit, addresses, run }}>
           <div className="stack">
             {tab === "token" && <TokenSection />}
-            {tab === "presale" && <PresaleSection />}
             {tab === "airdrop" && <AirdropSection airdrops={airdrops} initialRoot={initialRoot} />}
           </div>
         </CtxObj.Provider>

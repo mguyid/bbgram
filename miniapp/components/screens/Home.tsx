@@ -172,21 +172,22 @@ function PresaleStrip() {
   const now = useNow();
   const p = presale.data;
   if (!p && !presale.error) return <Skeleton height={56} />;
-  const purchased = BigInt(p?.purchased_wei || "0");
-  if (p && p.status === "claimable" && purchased > BigInt(0) && BigInt(p.claimed_wei || "0") >= purchased) return null;
+  if (p && p.status === "closed" && p.credited) return null; // finished: tokens already sent
 
   let text = "Presale · View details";
   if (p && !presaleReady(p)) text = "Presale · Coming soon";
   else if (p && p.start_at && p.end_at) {
-    const pct = Math.floor(percent(p.raised_wei, p.hard_cap_wei));
+    // "N% filled" only makes sense with a hard cap (0 = no cap).
+    const filled =
+      BigInt(p.hard_cap_wei || "0") > BigInt(0) ? ` · ${Math.floor(percent(p.raised_wei, p.hard_cap_wei))}% filled` : "";
     const toEnd = shortDuration(new Date(p.end_at).getTime() - now);
-    if (p.status === "live") text = `Presale live · ${pct}% filled · ends in ${toEnd}`;
+    if (p.status === "live") text = `Presale live${filled} · ends in ${toEnd}`;
     else if (p.status === "upcoming")
       text = `Presale starts in ${shortDuration(new Date(p.start_at).getTime() - now)}`;
-    else if (p.status === "paused") text = `Presale paused · ${pct}% filled`;
-    else if (p.status === "ended") text = `Presale ended · ${pct}% filled`;
-    else if (BigInt(p.claimable_wei || "0") > BigInt(0)) text = "Presale tokens are ready to claim";
-    else text = "Presale claim is open";
+    else if (p.status === "paused") text = `Presale paused${filled}`;
+    else if (p.status === "ended") text = `Presale ended${filled}`;
+    else if (BigInt(p.tokens_wei || "0") > BigInt(0)) text = "Presale closed · your tokens arrive after launch";
+    else text = "Presale closed";
   }
   return (
     <button type="button" className="card cta-strip" onClick={() => go("presale")}>

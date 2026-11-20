@@ -66,18 +66,21 @@ async def accrue_x_daily(session: AsyncSession, now: datetime | None = None) -> 
 
 
 async def index_presale(session: AsyncSession) -> int:
-    """Poll Contributed logs from presale_start_block; idempotent by (tx_hash, log_index)."""
+    """Index USDT transfers into the presale wallet from presale_start_block; idempotent by (tx_hash, log_index).
+    Stops once the presale is closed, so allocations and the contribution list stay in step."""
     rt = await runtime.get()
-    if not chain.chain_configured(rt, rt.presale_address):
+    if not (rt.rpc_url and rt.presale_wallet and rt.usdt):
+        return 0
+    if (await get_config(session))["presale_closed_at"]:
         return 0
     last = await redis.get(INDEXER_KEY)
     from_block = int(last) + 1 if last else rt.start_block_int
-    logs, scanned_to = await chain.fetch_contributed_logs(rt, from_block)
+    logs, scanned_to = await chain.fetch_presale_transfers(rt, from_block)
     wallets = dict((await session.execute(select(func.lower(Wallet.address), Wallet.user_id))).all())
     for lg in logs:
         await session.execute(insert(PresaleContribution).values(
             wallet_address=lg["buyer"], user_id=wallets.get(lg["buyer"].lower()), amount_wei=lg["amount"],
-            total_wei=lg["total"], tx_hash=lg["tx_hash"], log_index=lg["log_index"],
+            total_wei=0, tx_hash=lg["tx_hash"], log_index=lg["log_index"],
             block_number=lg["block_number"], created_at=datetime.now(UTC),
         ).on_conflict_do_nothing(constraint="uq_presale_contributions_log"))
     await session.commit()

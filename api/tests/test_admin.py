@@ -239,26 +239,20 @@ async def test_x_review_presale_and_stats(client, admin_headers, monkeypatch):
 
     # presale indexer with a stubbed chain
     await set_runtime(rpc_url="http://rpc.invalid")
-    logs = [{"buyer": wallet, "amount": 10 * 10**18, "total": 10 * 10**18, "tx_hash": "0x" + "aa" * 32,
-             "log_index": 0, "block_number": 5}]
+    await set_runtime(usdt_address="0x" + "55" * 20)
+    logs = [{"buyer": wallet, "amount": 10 * 10**18, "tx_hash": "0x" + "aa" * 32, "log_index": 0,
+             "block_number": 5}]
 
     async def fake_fetch(rt, from_block):
         return logs, 10
 
-    monkeypatch.setattr(chain, "fetch_contributed_logs", fake_fetch)
+    monkeypatch.setattr(chain, "fetch_presale_transfers", fake_fetch)
     async with SessionLocal() as s:
         assert await jobs.index_presale(s) == 1
         await jobs.index_presale(s)  # same log again: idempotent
     c = (await client.get("/admin-api/presale/contributions", headers=admin_headers)).json()
     assert c["raised_wei"] == str(10 * 10**18) and len(c["items"]) == 1 and c["items"][0]["user_id"] == me["id"]
 
-    await client.post("/admin-api/presale/whitelist", headers=admin_headers, json={"wallet_address": wallet})
-    assert (await client.post("/admin-api/presale/whitelist", headers=admin_headers,
-                              json={"wallet_address": wallet})).status_code == 409
-    wl = (await client.get("/admin-api/presale/whitelist", headers=admin_headers)).json()["items"]
-    assert wl[0]["username"] == "alice"
-    assert (await client.delete(f"/admin-api/presale/whitelist/{wallet.lower()}",
-                                headers=admin_headers)).status_code == 200
 
     stats = (await client.get("/admin-api/stats", headers=admin_headers)).json()
     assert stats["users"] == 1 and stats["wallets_linked"] == 1

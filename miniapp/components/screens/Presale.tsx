@@ -1,9 +1,11 @@
 "use client";
 
-import { Check, Gift } from "lucide-react";
+import { Check, ExternalLink, Gift } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { presaleReady, type Airdrop, type Presale } from "@/lib/api";
-import { date, percent, shortAddress, tokenPrice, tokens, unlockTerms, usdt } from "@/lib/format";
+import { date, percent, shortAddress, tokenPrice, tokens, usdt } from "@/lib/format";
+import { explorerTx } from "@/lib/loadWallet";
+import { openLink } from "@/lib/telegram";
 import type { WalletModule } from "@/lib/loadWallet";
 import { useApi } from "@/lib/useApi";
 import { useApp } from "../AppContext";
@@ -16,7 +18,7 @@ const STATUS: Record<Presale["status"], { label: string; tone: "success" | "acce
   upcoming: { label: "Upcoming", tone: "accent" },
   paused: { label: "Paused", tone: "warning" },
   ended: { label: "Ended", tone: "default" },
-  claimable: { label: "Claim open", tone: "success" },
+  closed: { label: "Closed", tone: "default" },
 };
 
 export function PresaleScreen() {
@@ -50,7 +52,7 @@ export function PresaleScreen() {
         <>
           <ProgressCard p={p} onTick={presale.reload} />
           <ActionCard p={p} />
-          {BigInt(p.purchased_wei || "0") > BigInt(0) && <AllocationCard p={p} onClaimed={presale.reload} />}
+          {BigInt(p.contributed_wei || "0") > BigInt(0) && <AllocationCard p={p} />}
         </>
       )}
       {airdrop.data?.available && BigInt(airdrop.data.amount_wei || "0") > BigInt(0) && (
@@ -65,12 +67,24 @@ function ProgressCard({ p, onTick }: { p: Presale; onTick: () => void }) {
   return (
     <Card title="Baby Grand presale" action={<Chip tone={s.tone}>{s.label}</Chip>}>
       <div className="stack">
-        <ProgressBar
-          value={percent(p.raised_wei, p.hard_cap_wei)}
-          label="Raised"
-          right={`${usdt(p.raised_wei)} / ${usdt(p.hard_cap_wei)}`}
-        />
+        {BigInt(p.hard_cap_wei || "0") > BigInt(0) ? (
+          <ProgressBar
+            value={percent(p.raised_wei, p.hard_cap_wei)}
+            label="Raised"
+            right={`${usdt(p.raised_wei)} / ${usdt(p.hard_cap_wei)}`}
+          />
+        ) : (
+          <div className="between">
+            <span className="t-caption muted">Raised</span>
+            <span className="t-h2 num">{usdt(p.raised_wei)}</span>
+          </div>
+        )}
         <div className="stack-8">
+          {p.status === "closed" && (
+            <p className="t-caption muted" style={{ margin: 0 }}>
+              The presale is closed. Allocations are final, and tokens are sent to buyers after launch.
+            </p>
+          )}
           {p.status === "upcoming" && p.start_at && (
             <div className="between">
               <span className="t-caption muted">Starts in</span>
@@ -101,24 +115,22 @@ function ProgressCard({ p, onTick }: { p: Presale; onTick: () => void }) {
 
 function ActionCard({ p }: { p: Presale }) {
   const { me, openWallet, openBuy } = useApp();
-  if (p.status === "claimable") return null;
+  if (p.status === "closed") return null;
   const reachedMax = BigInt(p.contributed_wei || "0") >= BigInt(p.max_wei);
 
   let text = "";
   let action: ReactNode = null;
-  if (p.status === "ended") text = "The presale has ended. Claiming opens after the token launch.";
+  if (p.status === "ended") text = "The presale has ended. Tokens are sent to buyers after the launch.";
   else if (p.status === "paused") text = "The presale is paused. Buying is disabled for now.";
   else if (!me.wallet_address) {
-    text = "Link a wallet to join the presale whitelist.";
+    text = "Link a wallet to join the presale. You buy from that wallet, and your tokens are sent to it.";
     action = <Button onClick={openWallet}>Link wallet</Button>;
-  } else if (!p.whitelisted) {
-    text = `Your wallet ${shortAddress(me.wallet_address)} is not on the whitelist yet.`;
   } else if (p.status === "upcoming") {
-    text = `You are on the whitelist with ${shortAddress(me.wallet_address)}. Come back when the presale opens.`;
+    text = `You will buy from ${shortAddress(me.wallet_address)}. Come back when the presale opens.`;
   } else if (reachedMax) {
     text = "You reached the maximum for this wallet.";
   } else {
-    text = `You are on the whitelist with ${shortAddress(me.wallet_address)}.`;
+    text = `You buy from ${shortAddress(me.wallet_address)}, and your tokens are sent to it after launch.`;
     action = <Button onClick={openBuy}>Buy tokens</Button>;
   }
   return (
@@ -144,69 +156,53 @@ function linkedConnect(linked: string | null) {
   };
 }
 
-function AllocationCard({ p, onClaimed }: { p: Presale; onClaimed: () => void }) {
-  const { me } = useApp();
+function AllocationCard({ p }: { p: Presale }) {
   const chainId = p.chain_id ?? 56;
-  const [tx, setTx] = useState<Tx>({ phase: "idle" });
-  const busy = tx.phase === "wallet" || tx.phase === "pending";
-  const purchased = BigInt(p.purchased_wei || "0");
-  const claimable = BigInt(p.claimable_wei || "0");
-  const allClaimed = purchased > BigInt(0) && BigInt(p.claimed_wei || "0") >= purchased;
-  const terms = unlockTerms(p.unlock_bps, p.vesting_seconds);
-  const claim = async () => {
-    const ok = await runTx(
-      chainId,
-      async (w) => {
-        await linkedConnect(me.wallet_address)(w);
-        return w.claimPresale(p.presale_address || "", chainId);
-      },
-      setTx,
-    );
-    if (ok) onClaimed();
-  };
+  const closed = p.status === "closed";
+  const over = BigInt(p.contributed_wei || "0") > BigInt(p.counted_wei || "0");
   return (
-    <Card title="Your allocation">
+    <Card title="Your allocation" action={closed ? <Chip tone={p.credited ? "success" : "accent"}>{p.credited ? "Sent" : "Final"}</Chip> : <Chip>Estimate</Chip>}>
       <div className="stack">
         <div className="stats" style={{ gridTemplateColumns: "1fr 1fr" }}>
           <div className="card-plain stack-8" style={{ padding: 12 }}>
-            <span className="t-micro muted">Contributed</span>
+            <span className="t-micro muted">Paid</span>
             <span className="t-h2 num">{usdt(p.contributed_wei)}</span>
           </div>
           <div className="card-plain stack-8" style={{ padding: 12 }}>
-            <span className="t-micro muted">Tokens</span>
-            <span className="t-h2 num ellipsis">{tokens(p.purchased_wei)}</span>
+            <span className="t-micro muted">{closed ? "Tokens" : "Est. tokens"}</span>
+            <span className="t-h2 num ellipsis">{tokens(p.tokens_wei)}</span>
           </div>
         </div>
-        <div className="stack-8">
-          <div className="between">
-            <span className="t-caption muted">Claimed</span>
-            <span className="t-caption num">{tokens(p.claimed_wei)}</span>
-          </div>
-          <div className="between">
-            <span className="t-caption muted">Claimable now</span>
-            <span className="t-caption num">{tokens(p.claimable_wei)}</span>
-          </div>
-        </div>
-        {p.vesting_seconds > 0 && (
-          <ProgressBar
-            value={percent(p.vested_wei, p.purchased_wei)}
-            label={terms || "Unlocked"}
-            right={`${Math.floor(percent(p.vested_wei, p.purchased_wei))}%`}
-          />
+        {over && (
+          <span className="t-caption c-warning">
+            Only {usdt(p.counted_wei)} counts toward your allocation: the maximum is {usdt(p.max_wei)} per wallet.
+          </span>
         )}
-        {p.status === "claimable" &&
-          (allClaimed ? (
+        {p.credited ? (
+          <div className="stack-8">
             <span className="hrow c-success t-strong">
-              <Check {...ic} /> All tokens claimed
+              <Check {...ic} /> Tokens sent to your wallet
             </span>
-          ) : (
-            <>
-              <TxStatus tx={tx} chainId={chainId} success="Tokens claimed" />
-              <Button block loading={busy} disabled={claimable === BigInt(0)} onClick={claim}>
-                {tx.phase === "failed" ? "Try again" : `Claim ${tokens(claimable)} tokens`}
-              </Button>
-            </>
-          ))}
+            {p.credited_tx && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-compact"
+                style={{ alignSelf: "flex-start", paddingLeft: 0 }}
+                onClick={() => openLink(explorerTx(chainId, p.credited_tx || ""))}
+              >
+                <span className="btn-label">
+                  View on BscScan <ExternalLink size={16} strokeWidth={1.75} />
+                </span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <span className="t-caption muted">
+            {closed
+              ? "The presale is closed. Your tokens are sent to your linked wallet after launch."
+              : "This is an estimate. Your final allocation is fixed when the presale closes, and your tokens are sent to your linked wallet after launch."}
+          </span>
+        )}
       </div>
     </Card>
   );

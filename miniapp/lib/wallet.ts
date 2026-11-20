@@ -16,23 +16,13 @@ import type { Address, Hex } from "viem";
 const erc20Abi = [
   {
     type: "function",
-    name: "approve",
+    name: "transfer",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "spender", type: "address" },
+      { name: "to", type: "address" },
       { name: "amount", type: "uint256" },
     ],
     outputs: [{ name: "", type: "bool" }],
-  },
-  {
-    type: "function",
-    name: "allowance",
-    stateMutability: "view",
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "spender", type: "address" },
-    ],
-    outputs: [{ name: "", type: "uint256" }],
   },
   {
     type: "function",
@@ -41,21 +31,6 @@ const erc20Abi = [
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
   },
-] as const;
-
-const presaleAbi = [
-  {
-    type: "function",
-    name: "buy",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "amount", type: "uint256" },
-      { name: "maxAllocation", type: "uint256" },
-      { name: "signature", type: "bytes" },
-    ],
-    outputs: [],
-  },
-  { type: "function", name: "claim", stateMutability: "nonpayable", inputs: [], outputs: [] },
 ] as const;
 
 const airdropAbi = [
@@ -188,47 +163,16 @@ export async function usdtBalance(usdt: string, owner: string, chainId: number):
   });
 }
 
-export async function allowance(usdt: string, owner: string, spender: string, chainId: number) {
-  return readContract(config(), {
-    address: usdt as Address,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args: [owner as Address, spender as Address],
-    chainId,
-  });
-}
-
-export async function approve(usdt: string, spender: string, amount: bigint, chainId: number): Promise<Hex> {
+/** Presale payment: a plain USDT transfer from the connected wallet to the presale wallet. */
+export async function payUsdt(usdt: string, to: string, amount: bigint, chainId: number): Promise<Hex> {
   await ensureChain(chainId);
   return writeContract(config(), {
     address: usdt as Address,
     abi: erc20Abi,
-    functionName: "approve",
-    args: [spender as Address, amount],
+    functionName: "transfer",
+    args: [to as Address, amount],
     chainId,
   });
-}
-
-export async function buy(
-  presale: string,
-  amount: bigint,
-  maxAllocation: bigint,
-  signature: string,
-  chainId: number,
-): Promise<Hex> {
-  await ensureChain(chainId);
-  return writeContract(config(), {
-    address: presale as Address,
-    abi: presaleAbi,
-    functionName: "buy",
-    args: [amount, maxAllocation, signature as Hex],
-    chainId,
-  });
-}
-
-export async function claimPresale(presale: string, chainId: number): Promise<Hex> {
-  await ensureChain(chainId);
-  return writeContract(config(), { address: presale as Address, abi: presaleAbi, functionName: "claim", chainId });
 }
 
 export async function claimAirdrop(

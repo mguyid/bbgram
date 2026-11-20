@@ -63,8 +63,9 @@ export type XState = {
   bio_marked: boolean;
 };
 
+/** Presale without a contract: buyers pay USDT straight into the presale wallet (interfaces.md section 1). */
 export type Presale = {
-  status: "upcoming" | "live" | "paused" | "ended" | "claimable";
+  status: "upcoming" | "live" | "paused" | "ended" | "closed";
   start_at: string | null;
   end_at: string | null;
   raised_wei: string;
@@ -74,17 +75,16 @@ export type Presale = {
   min_wei: string;
   max_wei: string;
   chain_id: number | null;
-  presale_address: string | null;
+  presale_wallet: string | null;
   usdt_address: string | null;
-  whitelisted: boolean;
+  /** USDT received from the user's linked wallet. */
   contributed_wei: string;
-  purchased_wei: string;
-  vested_wei: string;
-  claimed_wei: string;
-  claimable_wei: string;
-  unlock_bps: number;
-  vesting_seconds: number;
-  claim_start: string | null;
+  /** The part of it that counts (capped at the per-wallet max). */
+  counted_wei: string;
+  /** Estimated tokens while open; the frozen allocation once closed. */
+  tokens_wei: string;
+  credited: boolean;
+  credited_tx: string | null;
 };
 
 export type Airdrop = {
@@ -96,9 +96,11 @@ export type Airdrop = {
   deadline: string | null;
 };
 
-/** False when the API has no chain/contract configured yet (null times/addresses). */
+/** False until the admin has set the presale wallet, price and times (and USDT on testnet). */
 export function presaleReady(p: Presale): boolean {
-  return !!(p.presale_address && p.usdt_address && p.start_at && p.end_at && p.chain_id);
+  return !!(
+    p.presale_wallet && p.usdt_address && p.start_at && p.end_at && p.chain_id && BigInt(p.tokens_per_usdt_wei || "0") > BigInt(0)
+  );
 }
 
 /** Referral code: Telegram start_param first, else `?start_param=` from the bot's web_app button URL. */

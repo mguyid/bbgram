@@ -3,9 +3,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from eth_account import Account
-
-SIGNER = Account.from_key("0x" + "11" * 32)
 os.environ.update({
     "DATABASE_URL": os.environ.get("TEST_DATABASE_URL", "postgresql+asyncpg://postgres:test@localhost:55432/bg_test"),
     "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://localhost:56379/15"),
@@ -15,14 +12,13 @@ os.environ.update({
     "MINIAPP_URL": "https://app.example.com",
     "CORS_ORIGINS": "https://app.example.com",
 })
-PRESALE = "0x" + "ab" * 20
+PRESALE_WALLET = "0x" + "AB" * 20
 RUNTIME_DEFAULTS = {
     "telegram_bot_token": "123456:TEST-TOKEN",
     "telegram_bot_username": "BabyGrandBot",
     "telegram_webhook_secret": "hook-secret",
     "chain_id": "97",
-    "presale_address": PRESALE,
-    "signer_key": SIGNER.key.hex(),
+    "presale_wallet": PRESALE_WALLET,
 }
 
 API_DIR = Path(__file__).resolve().parent.parent
@@ -41,7 +37,7 @@ from app.main import app  # noqa: E402
 from app.redis_client import redis  # noqa: E402
 
 TABLES = [
-    "airdrop_proofs", "airdrops", "snapshot_balances", "snapshots", "presale_contributions", "presale_whitelist",
+    "airdrop_proofs", "airdrops", "snapshot_balances", "snapshots", "presale_contributions", "presale_allocations",
     "admin_audit_log", "bans", "admins", "risk_scores", "screen_views", "user_devices", "x_posts", "x_accounts",
     "wallets", "spins", "point_events", "referrals", "users", "runtime_settings",
 ]

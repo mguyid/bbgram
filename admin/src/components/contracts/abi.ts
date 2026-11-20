@@ -1,4 +1,4 @@
-// ABI fragments for the admin Contracts page (docs/interfaces.md §4). Human-readable form, parsed by viem.
+// ABI fragments for the admin Contracts and Presale pages (docs/interfaces.md §4). Human-readable form, parsed by viem.
 import { parseAbi } from "viem";
 
 const ownable = [
@@ -16,8 +16,11 @@ const erc20 = [
   "function totalSupply() view returns (uint256)",
   "function balanceOf(address account) view returns (uint256)",
   "function transfer(address to, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
   "error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)",
   "error ERC20InvalidReceiver(address receiver)",
+  "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
 ] as const;
 
 export const erc20Abi = parseAbi(erc20);
@@ -42,44 +45,13 @@ export const tokenAbi = parseAbi([
   "error TaxTooHigh()",
 ]);
 
-export const presaleAbi = parseAbi([
-  ...ownable,
-  "function usdt() view returns (address)",
-  "function token() view returns (address)",
-  "function signer() view returns (address)",
-  "function tokensPerUsdt() view returns (uint256)",
-  "function hardCapWei() view returns (uint256)",
-  "function minWei() view returns (uint256)",
-  "function maxWei() view returns (uint256)",
-  "function startTime() view returns (uint64)",
-  "function endTime() view returns (uint64)",
-  "function totalRaised() view returns (uint256)",
-  "function totalTokensSold() view returns (uint256)",
-  "function claimEnabled() view returns (bool)",
-  "function claimStart() view returns (uint64)",
-  "function unlockBps() view returns (uint256)",
-  "function vestingDuration() view returns (uint64)",
-  "function paused() view returns (bool)",
-  "function setPrice(uint256 tokensPerUsdt)",
-  "function setHardCap(uint256 hardCapWei)",
-  "function setLimits(uint256 minWei, uint256 maxWei)",
-  "function setTimes(uint64 start, uint64 end)",
-  "function setSigner(address signer)",
-  "function pause()",
-  "function unpause()",
-  "function setToken(address token)",
-  "function setUnlock(uint256 unlockBps, uint64 vestingDuration)",
-  "function enableClaim()",
-  "function withdrawUsdt(address to)",
-  "function withdrawTokens(address to, uint256 amount)",
-  "error ZeroAddress()",
-  "error ZeroAmount()",
-  "error InvalidTimes()",
-  "error AlreadyStarted()",
-  "error TokenAlreadySet()",
-  "error TokenNotSet()",
-  "error EnforcedPause()",
-  "error ExpectedPause()",
+/** Stateless batch sender used to credit presale buyers (docs/interfaces.md §4 Multisend). */
+export const multisendAbi = parseAbi([
+  "function send(address token, address[] recipients, uint256[] amounts)",
+  "error LengthMismatch()",
+  "error SafeERC20FailedOperation(address token)",
+  "error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)",
+  "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
 ]);
 
 export const airdropAbi = parseAbi([
@@ -101,13 +73,9 @@ export const ERROR_TEXT: Record<string, string> = {
   ERC20InsufficientBalance: "Not enough tokens in the connected wallet.",
   ERC20InvalidReceiver: "Invalid receiver address.",
   ZeroAddress: "Address must not be zero.",
-  ZeroAmount: "Value must be greater than zero.",
   TaxTooHigh: "Tax cannot exceed 100%.",
-  InvalidTimes: "Start must be before end.",
-  AlreadyStarted: "Not editable: the presale has started and is not paused. Pause it first.",
-  TokenAlreadySet: "Token address is already set (it can be set only once).",
-  TokenNotSet: "Set the token address first.",
-  EnforcedPause: "The presale is paused.",
-  ExpectedPause: "The presale is not paused.",
+  ERC20InsufficientAllowance: "The multisend is not approved for enough tokens. Approve first.",
+  SafeERC20FailedOperation: "A token transfer failed. Check the wallet's balance and approval.",
+  LengthMismatch: "Recipients and amounts do not match.",
   DeadlineNotReached: "The claim deadline has not passed yet (or no deadline is set).",
 };

@@ -7,10 +7,11 @@ from eth_utils import is_address, to_checksum_address
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import backup, chain, jobs, runtime, telegram
+from app import presale as presale_mod
 from app.config_store import get_config, set_config, validate_value
 from app.db import get_session
 from app.deps import current_admin, ip_rate_limit, owner_admin, writer_admin
@@ -22,7 +23,6 @@ from app.models import (
     Ban,
     PointEvent,
     PresaleContribution,
-    PresaleWhitelist,
     Referral,
     RiskScore,
     Snapshot,
@@ -345,8 +345,11 @@ async def write_config(body: dict[str, Any] = Body(...), admin: Admin = Depends(
     current = await get_config(session)
     try:
         values = {k: validate_value(k, v) for k, v in body.items()}
+        presale_mod.validate_update(current, values)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(409, str(e)) from e
     for k, v in values.items():
         if current[k] != v:
             await set_config(session, k, v)
@@ -566,51 +569,72 @@ async def airdrop_proofs(airdrop_id: int, admin: Admin = Depends(current_admin),
     ]}
 
 
-# ---------- presale ----------
+# ---------- presale (no contract; interfaces.md section 2) ----------
 
-@router.get("/presale/whitelist")
-async def whitelist(admin: Admin = Depends(current_admin), session: AsyncSession = Depends(get_session)):
-    rows = (await session.execute(
-        select(PresaleWhitelist, User.username).outerjoin(User, User.id == PresaleWhitelist.user_id)
-        .order_by(PresaleWhitelist.created_at.desc())
-    )).all()
-    return {"items": [
-        {"wallet_address": w.wallet_address, "user_id": w.user_id, "username": name, "created_at": w.created_at}
-        for w, name in rows
-    ]}
+@router.get("/presale")
+async def presale_summary(admin: Admin = Depends(current_admin), session: AsyncSession = Depends(get_session)):
+    rt = await runtime.get()
+    t = await presale_mod.get_terms(session)
+    raised = await presale_mod.raised(session)
+    alloc = await presale_mod.allocations(session)
+    last = await redis.get(jobs.INDEXER_KEY)
+    return {
+        "status": presale_mod.status(rt, t, raised), "start_at": presale_mod.iso(t.start),
+        "end_at": presale_mod.iso(t.end), "paused": t.paused, "raised_wei": str(raised),
+        "counted_wei": alloc["total_usdt_wei"], "tokens_wei": alloc["total_tokens_wei"],
+        "contributors": len(alloc["items"]), "hard_cap_wei": str(t.hard_cap_wei),
+        "tokens_per_usdt_wei": str(t.tokens_per_usdt_wei), "min_wei": str(t.min_wei), "max_wei": str(t.max_wei),
+        "presale_wallet": rt.presale_wallet or None, "closed_at": presale_mod.iso(t.closed_at),
+        "credited": await presale_mod.credited_count(session), "last_block": int(last) if last else None,
+    }
 
 
-class WhitelistIn(BaseModel):
-    wallet_address: str
-    user_id: int | None = None
+@router.get("/presale/allocations")
+async def presale_allocations(admin: Admin = Depends(current_admin), session: AsyncSession = Depends(get_session)):
+    return await presale_mod.allocations(session)
 
 
-@router.post("/presale/whitelist")
-async def add_whitelist(body: WhitelistIn, admin: Admin = Depends(writer_admin),
-                        session: AsyncSession = Depends(get_session)):
-    if not is_address(body.wallet_address):
-        raise HTTPException(400, "Invalid wallet address.")
-    address = to_checksum_address(body.wallet_address)
-    user_id = body.user_id or (await session.execute(
-        select(Wallet.user_id).where(func.lower(Wallet.address) == address.lower()))).scalar()
-    if await session.get(PresaleWhitelist, address):
-        raise HTTPException(409, "This wallet is already whitelisted.")
-    session.add(PresaleWhitelist(wallet_address=address, user_id=user_id, added_by=admin.id))
-    await audit(session, admin, "presale.whitelist.add", address, {"user_id": user_id})
+@router.post("/presale/close")
+async def presale_close(admin: Admin = Depends(writer_admin), session: AsyncSession = Depends(get_session)):
+    try:
+        await presale_mod.close(session)
+    except PermissionError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    out = await presale_mod.allocations(session)
+    await audit(session, admin, "presale.close", None,
+                {"recipients": len(out["items"]), "total_tokens_wei": out["total_tokens_wei"]})
     await session.commit()
-    return {"wallet_address": address, "user_id": user_id}
+    return out
 
 
-@router.delete("/presale/whitelist/{wallet_address}")
-async def remove_whitelist(wallet_address: str, admin: Admin = Depends(writer_admin),
-                           session: AsyncSession = Depends(get_session)):
-    result = await session.execute(delete(PresaleWhitelist).where(
-        func.lower(PresaleWhitelist.wallet_address) == wallet_address.lower()))
-    if not result.rowcount:
-        raise HTTPException(404, "Wallet is not whitelisted.")
-    await audit(session, admin, "presale.whitelist.remove", wallet_address)
+@router.post("/presale/reopen")
+async def presale_reopen(admin: Admin = Depends(owner_admin), session: AsyncSession = Depends(get_session)):
+    try:
+        await presale_mod.reopen(session)
+    except PermissionError as e:
+        raise HTTPException(409, str(e)) from e
+    await audit(session, admin, "presale.reopen")
     await session.commit()
     return {"ok": True}
+
+
+class CreditedIn(BaseModel):
+    tx_hash: str = Field(pattern=r"^0x[0-9a-fA-F]{64}$")
+    wallet_addresses: list[str] = Field(min_length=1, max_length=500)
+
+
+@router.post("/presale/credited")
+async def presale_credited(body: CreditedIn, admin: Admin = Depends(writer_admin),
+                           session: AsyncSession = Depends(get_session)):
+    if not (await presale_mod.get_terms(session)).closed_at:
+        raise HTTPException(409, "Close the presale before crediting buyers.")
+    count = await presale_mod.mark_credited(session, body.tx_hash, body.wallet_addresses)
+    await audit(session, admin, "presale.credited", body.tx_hash, {"wallets": len(body.wallet_addresses),
+                                                                   "credited": count})
+    await session.commit()
+    return {"credited": count}
 
 
 @router.get("/presale/contributions")
@@ -627,7 +651,7 @@ async def contributions(admin: Admin = Depends(current_admin), session: AsyncSes
 
 # ---------- runtime settings (interfaces.md 2a) ----------
 
-ADDRESS_SETTINGS = ("token_address", "presale_address", "airdrop_address")
+ADDRESS_SETTINGS = ("usdt_address", "token_address", "presale_wallet", "airdrop_address", "multisend_address")
 INT_SETTINGS = ("chain_id", "presale_start_block")
 EDITABLE_SETTINGS = ("telegram_bot_token", "x_client_id", "x_client_secret", "rpc_url",
                      *ADDRESS_SETTINGS, *INT_SETTINGS)
@@ -647,10 +671,10 @@ async def read_settings(admin: Admin = Depends(current_admin)):
         "rpc_url": rt.rpc_url,
         "usdt_address": rt.usdt_address,
         "token_address": rt.token_address,
-        "presale_address": rt.presale_address,
+        "presale_wallet": rt.presale_wallet,
         "presale_start_block": rt.start_block_int if rt.presale_start_block else None,
         "airdrop_address": rt.airdrop_address,
-        "signer_address": runtime.signer_address(await runtime.signer_key()),
+        "multisend_address": rt.multisend_address,
     }
 
 
@@ -691,19 +715,13 @@ async def write_settings(body: dict[str, Any] = Body(...), admin: Admin = Depend
             values.update({"telegram_bot_username": bot["username"], "telegram_webhook_secret": secret,
                            "telegram_webhook_ok": "true"})
 
-    if "presale_address" in values:
-        if values["presale_address"]:
-            try:
-                usdt, block = await chain.read_presale_setup(values.get("rpc_url", rt.rpc_url),
-                                                             values["presale_address"])
-            except Exception as e:  # noqa: BLE001 - bad RPC URL, wrong address, network error
-                raise HTTPException(400, "Could not read the presale contract. Check the RPC URL and address.") from e
-            values["usdt_address"] = usdt
-            if not values.get("presale_start_block", rt.presale_start_block):
-                values["presale_start_block"] = str(block)
-        else:
-            values["usdt_address"] = ""
-    if "presale_address" in values or "presale_start_block" in values:
+    if values.get("presale_wallet") and not values.get("presale_start_block", rt.presale_start_block):
+        try:
+            values["presale_start_block"] = str(await chain.current_block(values.get("rpc_url", rt.rpc_url)))
+        except Exception as e:  # noqa: BLE001 - bad RPC URL, network error
+            raise HTTPException(400, "Could not reach the RPC to read the current block. Check the RPC URL, "
+                                     "or set the start block yourself.") from e
+    if {"presale_wallet", "presale_start_block", "usdt_address", "chain_id"} & values.keys():
         await redis.delete(jobs.INDEXER_KEY)  # re-index from the (new) start block
 
     await runtime.save(session, values)
@@ -738,16 +756,8 @@ async def telegram_reconnect(admin: Admin = Depends(owner_admin), session: Async
     return await telegram.bot_status()
 
 
-@router.post("/settings/rotate-signer")
-async def rotate_signer(admin: Admin = Depends(owner_admin), session: AsyncSession = Depends(get_session)):
-    address = await runtime.rotate_signer()
-    await audit(session, admin, "settings.rotate_signer", address)
-    await session.commit()
-    return {"signer_address": address}
-
-
 class ContractLogIn(BaseModel):
-    contract: Literal["token", "presale", "airdrop", "usdt"]
+    contract: Literal["token", "airdrop", "multisend", "usdt"]
     method: str = Field(max_length=64)
     args: list[Any] = []
     tx_hash: str = Field(max_length=128)

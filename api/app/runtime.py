@@ -5,14 +5,12 @@ Reads go through a small in-process cache (30 s TTL, invalidated locally on writ
 """
 
 import base64
-import secrets
 import time
 from dataclasses import dataclass
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from eth_account import Account
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,13 +19,14 @@ from app.db import SessionLocal
 from app.models import RuntimeSetting
 from app.settings import settings
 
-SECRET_KEYS = {"telegram_bot_token", "x_client_secret", "signer_key", "telegram_webhook_secret"}
+SECRET_KEYS = {"telegram_bot_token", "x_client_secret", "telegram_webhook_secret"}
 KEYS = SECRET_KEYS | {
     "telegram_bot_username", "telegram_webhook_ok", "x_client_id", "chain_id", "rpc_url", "usdt_address",
-    "token_address", "presale_address", "presale_start_block", "airdrop_address",
+    "token_address", "presale_wallet", "presale_start_block", "airdrop_address", "multisend_address",
 }
 CACHE_TTL = 30
 DEFAULT_CHAIN_ID = 97
+BSC_USDT = "0x55d398326f99059fF775485246999027B3197955"
 
 _fernet = Fernet(base64.urlsafe_b64encode(
     HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"babygrand-runtime-settings")
@@ -47,10 +46,10 @@ class Runtime:
     rpc_url: str = ""
     usdt_address: str = ""
     token_address: str = ""
-    presale_address: str = ""
+    presale_wallet: str = ""
     presale_start_block: str = ""
     airdrop_address: str = ""
-    signer_key: str = ""
+    multisend_address: str = ""
 
     @property
     def chain_id_int(self) -> int:
@@ -59,6 +58,13 @@ class Runtime:
     @property
     def start_block_int(self) -> int:
         return int(self.presale_start_block) if self.presale_start_block else 0
+
+    @property
+    def usdt(self) -> str:
+        """USDT contract buyers pay with: the setting, else official BSC USDT on chain 56."""
+        if self.usdt_address:
+            return self.usdt_address
+        return BSC_USDT if self.chain_id_int == 56 else ""
 
 
 def x_redirect_uri() -> str:
@@ -103,26 +109,3 @@ async def save(session: AsyncSession, values: dict[str, str]) -> None:
         stmt = insert(RuntimeSetting).values(key=key, value=stored)
         await session.execute(stmt.on_conflict_do_update(index_elements=[RuntimeSetting.key],
                                                          set_={"value": stored}))
-
-
-async def rotate_signer() -> str:
-    """Generate and store a new presale signer key; returns its address."""
-    acct = Account.create(secrets.token_hex(32))
-    async with SessionLocal() as session:
-        await save(session, {"signer_key": acct.key.hex()})
-        await session.commit()
-    invalidate()
-    return acct.address
-
-
-async def signer_key() -> str:
-    """The presale signer key, generated on first need."""
-    rt = await get()
-    if not rt.signer_key:
-        await rotate_signer()
-        rt = await get()
-    return rt.signer_key
-
-
-def signer_address(key: str) -> str:
-    return Account.from_key(key).address

@@ -1,4 +1,4 @@
-// Wallet stack (Reown AppKit + wagmi adapter + viem). Imported only by the Contracts page (dynamic import).
+// Wallet stack (Reown AppKit + wagmi adapter + viem). Imported only by the Contracts page and the Presale credit panel (dynamic imports).
 import { createAppKit, type AppKit } from "@reown/appkit";
 import { bsc, bscTestnet } from "@reown/appkit/networks";
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";

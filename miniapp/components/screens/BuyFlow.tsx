@@ -2,8 +2,8 @@
 
 import { CircleCheck, Share2, Wallet } from "lucide-react";
 import { useState } from "react";
-import { api, ApiError, presaleReady, type Presale } from "@/lib/api";
-import { fromWei, shortAddress, tokens, tokensFor, toWei, unlockTerms, usdt } from "@/lib/format";
+import { ApiError, presaleReady, type Presale } from "@/lib/api";
+import { fromWei, shortAddress, tokens, tokensFor, toWei, usdt } from "@/lib/format";
 import { loadWallet, walletErrorMessage } from "@/lib/loadWallet";
 import { haptic, shareUrl } from "@/lib/telegram";
 import { useApi } from "@/lib/useApi";
@@ -14,11 +14,11 @@ import { HandoffActions } from "../Handoff";
 import { runTx, TxStatus, type Tx } from "../TxStatus";
 import { Button, Card, ChipButton, Skeleton } from "../ui";
 
-type Signature = { wallet: string; max_allocation_wei: string; signature: string };
-
 const QUICK = [25, 100, 500, 1000];
 const ZERO = BigInt(0);
 const min = (a: bigint, b: bigint) => (a < b ? a : b);
+
+const STEPS = ["Connect", "Amount", "Pay"];
 
 export function BuyFlow({ onClose }: { onClose: () => void }) {
   const presale = useApi<Presale>("/api/presale");
@@ -41,35 +41,32 @@ export function BuyFlow({ onClose }: { onClose: () => void }) {
   );
 }
 
-const STEPS = ["Connect", "Amount", "Approve", "Confirm"];
-
 function BuySteps({ p, onClose }: { p: Presale; onClose: () => void }) {
   const { me } = useApp();
   const chainId = p.chain_id ?? 56;
   const usdtAddr = p.usdt_address || "";
-  const presaleAddr = p.presale_address || "";
+  const presaleWallet = p.presale_wallet || "";
   const [step, setStep] = useState(0);
   const [address, setAddress] = useState("");
-  const [sig, setSig] = useState<Signature | null>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [approveTx, setApproveTx] = useState<Tx>({ phase: "idle" });
-  const [buyTx, setBuyTx] = useState<Tx>({ phase: "idle" });
+  const [payTx, setPayTx] = useState<Tx>({ phase: "idle" });
 
   const amount = toWei(input) ?? ZERO;
   const contributed = BigInt(p.contributed_wei || "0");
-  const cap = min(BigInt(p.max_wei), sig ? BigInt(sig.max_allocation_wei) : BigInt(p.max_wei));
-  const walletLeft = cap > contributed ? cap - contributed : ZERO;
-  const saleLeft = BigInt(p.hard_cap_wei) > BigInt(p.raised_wei) ? BigInt(p.hard_cap_wei) - BigInt(p.raised_wei) : ZERO;
-  const limit = min(walletLeft, saleLeft);
+  const maxWei = BigInt(p.max_wei);
+  const capWei = BigInt(p.hard_cap_wei);
+  const walletLeft = maxWei > contributed ? maxWei - contributed : ZERO;
+  const raised = BigInt(p.raised_wei);
+  const limit = capWei > ZERO ? min(walletLeft, capWei > raised ? capWei - raised : ZERO) : walletLeft;
   const minWei = BigInt(p.min_wei);
 
   const amountError = (() => {
     if (!input.trim()) return "";
     if (toWei(input) === null || amount === ZERO) return "Enter a valid amount.";
-    if (amount > limit) return `You can buy up to ${usdt(limit)}.`;
+    if (amount > limit) return limit > ZERO ? `You can buy up to ${usdt(limit)}.` : "You reached the maximum for this wallet.";
     if (amount < minWei && amount !== walletLeft) return `Minimum is ${usdt(minWei)}.`;
     if (balance !== null && amount > balance) return "Not enough USDT in this wallet.";
     return "";
@@ -86,14 +83,17 @@ function BuySteps({ p, onClose }: { p: Presale; onClose: () => void }) {
     try {
       const w = await loadWallet(chainId);
       const a = await w.connect();
-      if (me.wallet_address && a.toLowerCase() !== me.wallet_address.toLowerCase()) {
+      // Payments are matched to buyers by the sending wallet, so only the linked wallet can buy.
+      if (!me.wallet_address || a.toLowerCase() !== me.wallet_address.toLowerCase()) {
         setAddress(a);
-        setError(`Connect the wallet you linked (${shortAddress(me.wallet_address)}).`);
+        setError(
+          me.wallet_address
+            ? `Connect the wallet you linked (${shortAddress(me.wallet_address)}).`
+            : "Link this wallet first, then buy from it.",
+        );
         haptic.error();
         return;
       }
-      const s = await api.get<Signature>("/api/presale/signature");
-      setSig(s);
       setAddress(a);
       setBalance(await w.usdtBalance(usdtAddr, a, chainId).catch(() => null));
       setStep(1);
@@ -114,42 +114,15 @@ function BuySteps({ p, onClose }: { p: Presale; onClose: () => void }) {
     setError("");
   };
 
-  const toApprove = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const w = await loadWallet(chainId);
-      const allowed = await w.allowance(usdtAddr, address, presaleAddr, chainId);
-      setApproveTx({ phase: "idle" });
-      setStep(allowed >= amount ? 3 : 2);
-      haptic.light();
-    } catch (e) {
-      await fail(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const approve = async () => {
-    const ok = await runTx(chainId, (w) => w.approve(usdtAddr, presaleAddr, amount, chainId), setApproveTx);
-    if (ok) setTimeout(() => setStep(3), 600);
-  };
-
-  const buy = async () => {
-    if (!sig) return;
-    await runTx(
-      chainId,
-      (w) => w.buy(presaleAddr, amount, BigInt(sig.max_allocation_wei), sig.signature, chainId),
-      setBuyTx,
-    );
+  const pay = async () => {
+    await runTx(chainId, (w) => w.payUsdt(usdtAddr, presaleWallet, amount, chainId), setPayTx);
   };
 
   const preview = tokens(tokensFor(amount, p.tokens_per_usdt_wei));
-  const terms = unlockTerms(p.unlock_bps, p.vesting_seconds);
   const txBusy = (t: Tx) => t.phase === "wallet" || t.phase === "pending";
 
   return (
-    <Flow title="Buy tokens" steps={STEPS} current={buyTx.phase === "success" ? 4 : step} onClose={onClose}>
+    <Flow title="Buy tokens" steps={STEPS} current={payTx.phase === "success" ? 3 : step} onClose={onClose}>
       {step === 0 && (
         <>
           <Card>
@@ -227,47 +200,29 @@ function BuySteps({ p, onClose }: { p: Presale; onClose: () => void }) {
               ))}
             </div>
             <div className="message-box between" style={{ wordBreak: "normal" }}>
-              <span className="t-caption muted">You receive</span>
-              <span className="t-strong num">{preview} tokens</span>
+              <span className="t-caption muted">Estimated tokens</span>
+              <span className="t-strong num">{preview}</span>
             </div>
             <span className="t-caption muted">
               Min {usdt(minWei)} · You can still buy {usdt(limit)}
             </span>
             {(amountError || error) && <span className="field-error">{amountError || error}</span>}
-            <Button block loading={busy} disabled={!input.trim() || !!amountError} onClick={toApprove}>
+            <Button
+              block
+              disabled={!input.trim() || !!amountError}
+              onClick={() => {
+                haptic.light();
+                setPayTx({ phase: "idle" });
+                setStep(2);
+              }}
+            >
               Continue
             </Button>
           </div>
         </Card>
       )}
 
-      {step === 2 && (
-        <Card>
-          <div className="stack">
-            <div>
-              <div className="t-strong">Approve USDT</div>
-              <div className="t-caption muted">
-                Allow the presale contract to use {fromWei(amount, 2)} USDT from your wallet. This needs a small BNB network
-                fee.
-              </div>
-            </div>
-            <TxStatus tx={approveTx} chainId={chainId} success="USDT approved" />
-            <Button
-              block
-              loading={txBusy(approveTx)}
-              disabled={approveTx.phase === "success"}
-              onClick={approve}
-            >
-              {approveTx.phase === "failed" ? "Try again" : "Approve USDT"}
-            </Button>
-            <Button variant="ghost" block disabled={txBusy(approveTx)} onClick={() => setStep(1)}>
-              Change amount
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {step === 3 && buyTx.phase !== "success" && (
+      {step === 2 && payTx.phase !== "success" && (
         <Card>
           <div className="stack">
             <div className="stack-8">
@@ -276,23 +231,27 @@ function BuySteps({ p, onClose }: { p: Presale; onClose: () => void }) {
                 <span className="t-strong num">{fromWei(amount, 2)} USDT</span>
               </div>
               <div className="between">
-                <span className="t-caption muted">You receive</span>
-                <span className="t-strong num">{preview} tokens</span>
+                <span className="t-caption muted">Estimated tokens</span>
+                <span className="t-strong num">{preview}</span>
               </div>
               <div className="between">
-                <span className="t-caption muted">Wallet</span>
+                <span className="t-caption muted">From</span>
                 <span className="mono">{shortAddress(address)}</span>
+              </div>
+              <div className="between">
+                <span className="t-caption muted">To presale wallet</span>
+                <span className="mono">{shortAddress(presaleWallet)}</span>
               </div>
             </div>
             <p className="t-caption muted" style={{ margin: 0 }}>
-              Tokens can be claimed in this app after launch.
-              {terms && ` ${terms}.`}
+              This sends USDT straight to the presale wallet and needs a small BNB network fee. Your tokens are sent
+              to this wallet after launch. Payments above {usdt(maxWei)} per wallet are not counted.
             </p>
-            <TxStatus tx={buyTx} chainId={chainId} />
-            <Button block loading={txBusy(buyTx)} onClick={buy}>
-              {buyTx.phase === "failed" ? "Try again" : "Buy tokens"}
+            <TxStatus tx={payTx} chainId={chainId} />
+            <Button block loading={txBusy(payTx)} onClick={pay}>
+              {payTx.phase === "failed" ? "Try again" : `Pay ${fromWei(amount, 2)} USDT`}
             </Button>
-            {!txBusy(buyTx) && (
+            {!txBusy(payTx) && (
               <Button variant="ghost" block onClick={() => setStep(1)}>
                 Change amount
               </Button>
@@ -301,15 +260,16 @@ function BuySteps({ p, onClose }: { p: Presale; onClose: () => void }) {
         </Card>
       )}
 
-      {buyTx.phase === "success" && (
+      {payTx.phase === "success" && (
         <Card>
           <div className="stack" style={{ alignItems: "center", textAlign: "center" }}>
             <CircleCheck size={40} strokeWidth={1.75} className="c-success" />
-            <div className="t-h2">Purchase complete</div>
+            <div className="t-h2">Payment sent</div>
             <div className="t-caption muted num">
-              You paid {fromWei(amount, 2)} USDT for {preview} tokens.
+              You paid {fromWei(amount, 2)} USDT for about {preview} tokens. It shows in your allocation within a
+              minute.
             </div>
-            <TxStatus tx={buyTx} chainId={chainId} success="Confirmed on chain" />
+            <TxStatus tx={payTx} chainId={chainId} success="Confirmed on chain" />
             <Button
               variant="secondary"
               block

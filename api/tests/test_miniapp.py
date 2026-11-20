@@ -16,7 +16,7 @@ from app.models import Referral, Spin, User
 from app.security import InitDataError, validate_init_data
 from app.services import apply_referral
 from app.settings import settings
-from tests.conftest import PRESALE, SIGNER, login, set_runtime
+from tests.conftest import login, set_runtime
 
 BOT_TOKEN = "123456:TEST-TOKEN"
 
@@ -293,76 +293,6 @@ async def test_leaderboard_tasks_events_settings(client, sent):
     assert (await client.post("/api/tasks/join_channel", headers=h1)).json() == {"state": "done"}
     assert (await client.post("/api/tasks/join_channel", headers=h1)).json() == {"state": "done"}
     assert (await client.get("/api/me", headers=h1)).json()["balance"] == 350
-
-
-async def test_presale_defaults_and_signature(client, admin_headers):
-    h, _ = await login(client, 1, "alice")
-    p = (await client.get("/api/presale", headers=h)).json()
-    assert p["status"] == "upcoming" and p["raised_wei"] == "0" and p["whitelisted"] is False
-    assert (await client.get("/api/presale/signature", headers=h)).status_code == 403
-
-    acct = Account.create()
-    n = (await client.get("/api/wallet/nonce", headers=h)).json()
-    sig = "0x" + acct.sign_message(encode_defunct(text=n["message"])).signature.hex()
-    await client.post("/api/wallet/link", headers=h,
-                      json={"address": acct.address, "signature": sig, "nonce": n["nonce"]})
-    r = await client.post("/admin-api/presale/whitelist", headers=admin_headers,
-                          json={"wallet_address": acct.address})
-    assert r.status_code == 200 and r.json()["user_id"] is not None
-    assert (await client.get("/api/presale", headers=h)).json()["whitelisted"] is True
-    s = (await client.get("/api/presale/signature", headers=h)).json()
-    assert s["wallet"] == acct.address and s["max_allocation_wei"] == str(2500 * 10**18)
-    from app.chain import recover_whitelist_signer
-    assert recover_whitelist_signer(97, PRESALE, acct.address, 2500 * 10**18, s["signature"]) == SIGNER.address
-
-
-async def test_presale_reads_chain(client, admin_headers, monkeypatch):
-    from app import chain
-
-    h, _ = await login(client, 1, "alice")
-    acct = Account.create()
-    n = (await client.get("/api/wallet/nonce", headers=h)).json()
-    sig = "0x" + acct.sign_message(encode_defunct(text=n["message"])).signature.hex()
-    await client.post("/api/wallet/link", headers=h,
-                      json={"address": acct.address, "signature": sig, "nonce": n["nonce"]})
-    await client.post("/admin-api/presale/whitelist", headers=admin_headers, json={"wallet_address": acct.address})
-    now = int(time.time())
-    state = {
-        "tokensPerUsdt": 100 * 10**18, "hardCapWei": 1000 * 10**18, "minWei": 10 * 10**18,
-        "maxWei": 500 * 10**18, "startTime": now - 60, "endTime": now + 3600, "totalRaised": 50 * 10**18,
-        "claimEnabled": False, "claimStart": 0, "unlockBps": 2500, "vestingDuration": 86400, "paused": False,
-        "contributed": 50 * 10**18, "purchased": 5000 * 10**18, "claimed": 0, "vested": 0, "claimable": 0,
-    }
-    wallets = []
-
-    async def fake_read(rt, wallet):
-        wallets.append(wallet)
-        return dict(state)
-
-    monkeypatch.setattr(chain, "read_presale", fake_read)
-    p = (await client.get("/api/presale", headers=h)).json()
-    assert wallets == [acct.address]
-    assert p["status"] == "live" and p["tokens_per_usdt_wei"] == str(100 * 10**18) and "price_wei" not in p
-    assert p["contributed_wei"] == str(50 * 10**18) and p["purchased_wei"] == str(5000 * 10**18)
-    assert p["unlock_bps"] == 2500 and p["vesting_seconds"] == 86400 and p["claim_start"] is None
-    assert p["presale_address"] == PRESALE and p["chain_id"] == 97 and p["whitelisted"] is True
-
-    statuses = []
-    for patch in ({"paused": True}, {"startTime": 0}, {"startTime": now + 60},
-                  {"startTime": now - 60, "endTime": now - 1}, {"endTime": now + 3600, "totalRaised": 1000 * 10**18},
-                  {"claimEnabled": True, "claimStart": 1893456000, "vested": 7, "claimed": 2, "claimable": 5}):
-        state.update(patch)
-        p = (await client.get("/api/presale", headers=h)).json()
-        statuses.append(p["status"])
-    assert statuses == ["paused", "upcoming", "upcoming", "ended", "ended", "claimable"]
-    assert (p["vested_wei"], p["claimed_wei"], p["claimable_wei"]) == ("7", "2", "5")
-    assert p["claim_start"] == "2030-01-01T00:00:00Z"
-
-    # the signature uses the on-chain maxWei()
-    s = (await client.get("/api/presale/signature", headers=h)).json()
-    assert s["max_allocation_wei"] == str(500 * 10**18)
-    from app.chain import recover_whitelist_signer
-    assert recover_whitelist_signer(97, PRESALE, acct.address, 500 * 10**18, s["signature"]) == SIGNER.address
 
 
 async def test_bot_webhook(client, sent):

@@ -46,16 +46,6 @@ export function tokenPrice(tokensPerUsdtWei: string): string {
   return t > BigInt(0) ? "$" + fromWei((WEI * WEI) / t, 6) : "";
 }
 
-/** Vesting terms, e.g. "25% at launch, rest over 30 days". "" when everything unlocks at launch. */
-export function unlockTerms(unlockBps: number, vestingSeconds: number): string {
-  if (!vestingSeconds || unlockBps >= 10000) return "";
-  const d = Math.round(vestingSeconds / 86400);
-  const h = Math.round(vestingSeconds / 3600);
-  const m = Math.max(1, Math.round(vestingSeconds / 60));
-  const span = d >= 1 ? `${d} day${d === 1 ? "" : "s"}` : h >= 1 ? `${h} hour${h === 1 ? "" : "s"}` : `${m} min`;
-  return unlockBps > 0 ? `${unlockBps / 100}% at launch, rest over ${span}` : `Unlocks gradually over ${span}`;
-}
-
 export function shortAddress(a: string | null | undefined): string {
   if (!a) return "";
   return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;

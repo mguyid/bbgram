@@ -20,7 +20,7 @@ export default function ContractsPage() {
     <>
       <PageHeader
         title="Contracts"
-        description="Connect an owner wallet to read and manage the token, presale and airdrop contracts."
+        description="Connect an owner wallet to read and manage the token and airdrop contracts."
       />
       <ErrorBox error={settings.error || airdrops.error} />
       {!settings.data && !settings.error && <Loading />}

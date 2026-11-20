@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import chain, runtime, telegram
+from app import presale as presale_mod
 from app.config_store import get_config
 from app.db import get_session
 from app.deps import current_user, ip_rate_limit, record_device
@@ -18,8 +19,7 @@ from app.models import (
     Airdrop,
     AirdropProof,
     PointEvent,
-    PresaleContribution,
-    PresaleWhitelist,
+    PresaleAllocation,
     Referral,
     ScreenView,
     Snapshot,
@@ -393,19 +393,10 @@ async def send_handoff(user: User = Depends(current_user)):
     return {"ok": True}
 
 
-# ---------- presale ----------
+# ---------- presale (no contract; interfaces.md section 1) ----------
 
 async def _user_wallet(session: AsyncSession, user_id: int) -> str | None:
     return (await session.execute(select(Wallet.address).where(Wallet.user_id == user_id))).scalar()
-
-
-async def _is_whitelisted(session: AsyncSession, wallet: str | None) -> bool:
-    if not wallet:
-        return False
-    q = select(PresaleWhitelist.wallet_address).where(
-        func.lower(PresaleWhitelist.wallet_address) == wallet.lower()
-    )
-    return (await session.execute(q)).first() is not None
 
 
 def _iso(ts: int) -> str | None:
@@ -415,63 +406,31 @@ def _iso(ts: int) -> str | None:
 @router.get("/presale")
 async def presale(user: User = Depends(current_user), session: AsyncSession = Depends(get_session)):
     rt = await runtime.get()
+    t = await presale_mod.get_terms(session)
+    raised = await presale_mod.raised(session)
     wallet = await _user_wallet(session, user.id)
     out = {
-        "status": "upcoming", "start_at": None, "end_at": None, "raised_wei": "0", "hard_cap_wei": "0",
-        "tokens_per_usdt_wei": "0", "min_wei": "0", "max_wei": "0", "chain_id": rt.chain_id_int,
-        "presale_address": rt.presale_address or None, "usdt_address": rt.usdt_address or None,
-        "whitelisted": await _is_whitelisted(session, wallet), "contributed_wei": "0", "purchased_wei": "0",
-        "vested_wei": "0", "claimed_wei": "0", "claimable_wei": "0", "unlock_bps": 0, "vesting_seconds": 0,
-        "claim_start": None,
+        "status": presale_mod.status(rt, t, raised), "start_at": presale_mod.iso(t.start),
+        "end_at": presale_mod.iso(t.end), "raised_wei": str(raised), "hard_cap_wei": str(t.hard_cap_wei),
+        "tokens_per_usdt_wei": str(t.tokens_per_usdt_wei), "min_wei": str(t.min_wei), "max_wei": str(t.max_wei),
+        "chain_id": rt.chain_id_int, "presale_wallet": rt.presale_wallet or None, "usdt_address": rt.usdt or None,
+        "contributed_wei": "0", "counted_wei": "0", "tokens_wei": "0", "credited": False, "credited_tx": None,
     }
-    s = await chain.read_presale(rt, wallet)
-    if s is None:
-        if wallet:  # fall back to indexed contributions
-            total = (await session.execute(
-                select(func.coalesce(func.sum(PresaleContribution.amount_wei), 0))
-                .where(func.lower(PresaleContribution.wallet_address) == wallet.lower())
-            )).scalar_one()
-            out["contributed_wei"] = str(int(total))
+    if not wallet:
         return out
-    now = int(datetime.now(UTC).timestamp())
-    if s["claimEnabled"]:
-        status = "claimable"
-    elif not s["startTime"] or now < s["startTime"]:
-        status = "upcoming"
-    elif now >= s["endTime"] or (s["hardCapWei"] and s["totalRaised"] >= s["hardCapWei"]):
-        status = "ended"
-    elif s["paused"]:
-        status = "paused"
-    else:
-        status = "live"
-    out.update({
-        "status": status, "start_at": _iso(s["startTime"]), "end_at": _iso(s["endTime"]),
-        "raised_wei": str(s["totalRaised"]), "hard_cap_wei": str(s["hardCapWei"]),
-        "tokens_per_usdt_wei": str(s["tokensPerUsdt"]), "min_wei": str(s["minWei"]), "max_wei": str(s["maxWei"]),
-        "unlock_bps": int(s["unlockBps"]), "vesting_seconds": int(s["vestingDuration"]),
-        "claim_start": _iso(s["claimStart"]),
-    })
-    for field in ("contributed", "purchased", "vested", "claimed", "claimable"):
-        out[f"{field}_wei"] = str(s.get(field, 0))
+    frozen = None
+    if t.closed_at:
+        frozen = (await session.execute(select(PresaleAllocation).where(
+            func.lower(PresaleAllocation.wallet_address) == wallet.lower()))).scalar_one_or_none()
+    if frozen is not None:
+        out.update({"contributed_wei": str(int(frozen.contributed_wei)), "counted_wei": str(int(frozen.counted_wei)),
+                    "tokens_wei": str(int(frozen.tokens_wei)), "credited": frozen.credited_tx is not None,
+                    "credited_tx": frozen.credited_tx})
+    elif not t.closed_at:
+        paid = await presale_mod.contributed(session, wallet)
+        counted, tokens = presale_mod.allocation(paid, t)
+        out.update({"contributed_wei": str(paid), "counted_wei": str(counted), "tokens_wei": str(tokens)})
     return out
-
-
-@router.get("/presale/signature")
-async def presale_signature(user: User = Depends(current_user), session: AsyncSession = Depends(get_session)):
-    wallet = await _user_wallet(session, user.id)
-    if not await _is_whitelisted(session, wallet):
-        raise HTTPException(403, "Your linked wallet is not on the whitelist.")
-    rt = await runtime.get()
-    if not rt.presale_address:
-        raise HTTPException(409, "The presale is not open yet.")
-    key = await runtime.signer_key()
-    s = await chain.read_presale(rt, None)
-    max_allocation = int(s["maxWei"]) if s else 2500 * 10**18
-    return {
-        "wallet": wallet,
-        "max_allocation_wei": str(max_allocation),
-        "signature": chain.sign_whitelist(rt.chain_id_int, rt.presale_address, key, wallet, max_allocation),
-    }
 
 
 # ---------- airdrop ----------

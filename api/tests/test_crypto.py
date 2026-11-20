@@ -4,10 +4,8 @@ import random
 
 import pytest
 from eth_abi import encode
-from eth_account import Account
 from eth_utils import keccak, to_checksum_address
 
-from app import chain
 from app.merkle import build_tree, leaf_hash
 
 
@@ -53,39 +51,3 @@ def test_merkle_matches_contract_vectors():
     assert tree.root == ROOT
     assert tree.proof(*entries[0]) == [LEAF_B]
     assert tree.proof(*entries[1]) == [LEAF_A]
-
-
-def test_eip712_matches_contract_vectors():
-    anvil0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-    presale = "0x3333333333333333333333333333333333333333"
-    max_alloc = 2500 * 10**18
-
-    domain_type = keccak(text="EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
-    domain_sep = keccak(encode(
-        ["bytes32", "bytes32", "bytes32", "uint256", "address"],
-        [domain_type, keccak(text="BabyGrandPresale"), keccak(text="1"), 97, presale],
-    ))
-    struct_hash = keccak(encode(["bytes32", "address", "uint256"],
-                                [keccak(text="Whitelist(address wallet,uint256 maxAllocation)"), A, max_alloc]))
-    digest = keccak(b"\x19\x01" + domain_sep + struct_hash)
-    assert "0x" + domain_sep.hex() == "0x3f4ac228c413f9d56d27efca0bbcf11b750fff97ea705181c276cea8b7f3a62c"
-    assert "0x" + struct_hash.hex() == "0x588d8f2f96ca6c84b97464024660d7adf90ac02e96a1d9c1031e6122a54840ea"
-    assert "0x" + digest.hex() == "0xa16b357c870e2bb0138b11c76a5cc442e3240f2647b6d269b18700250920c89b"
-
-    sig = chain.sign_whitelist(97, presale, anvil0, A, max_alloc)
-    assert sig == (
-        "0x951591c6829c7ab5a14a122973588ce96176dc1fff38864fee3615fbfd8008372f"
-        "8265015d79356cfadd924dc74ecd998a72d3cc69388a1e8bff047eabc2a9711c"
-    )
-    signer = Account.from_key(anvil0).address
-    assert chain.recover_whitelist_signer(97, presale, A, max_alloc, sig) == signer
-    assert Account._recover_hash(digest, signature=bytes.fromhex(sig[2:])) == signer
-
-
-def test_eip712_signature_recovers_to_signer():
-    from tests.conftest import PRESALE, SIGNER
-
-    wallet = Account.create().address
-    sig = chain.sign_whitelist(97, PRESALE, SIGNER.key.hex(), wallet, 2500 * 10**18)
-    assert chain.recover_whitelist_signer(97, PRESALE, wallet, 2500 * 10**18, sig) == SIGNER.address
-    assert chain.recover_whitelist_signer(97, PRESALE, wallet, 2499 * 10**18, sig) != SIGNER.address
