@@ -44,6 +44,33 @@ let adapter: WagmiAdapter | null = null;
 
 export const projectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID || "";
 
+/*
+ * Returning from a wallet app (phone browser + WalletConnect). While the browser is in the background the OS
+ * can silently kill WalletConnect's relay socket, and WalletConnect only detects that in Node. The wallet's
+ * answer (approval, tx hash) then waits at the relay and the page hangs on "waiting for wallet confirmation".
+ * Restart the relay connection when the page comes back after a real absence so the answer is delivered.
+ * Same fix as the mini app's lib/wallet.ts.
+ */
+const MIN_AWAY_MS = 2000;
+let hiddenAt = 0;
+
+function watchResume() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      hiddenAt = Date.now();
+      return;
+    }
+    if (!hiddenAt || Date.now() - hiddenAt < MIN_AWAY_MS) return;
+    hiddenAt = 0;
+    void kit
+      ?.getUniversalProvider()
+      .then((p) => p?.client?.core?.relayer?.restartTransport())
+      .catch(() => {
+        // Offline or no session yet: nothing to revive. A later return tries again.
+      });
+  });
+}
+
 /** Creates the AppKit modal once. Returns null when no Reown project id is configured. */
 export function initWallet(chain: Chain): AppKit | null {
   if (kit) return kit;
@@ -58,6 +85,7 @@ export function initWallet(chain: Chain): AppKit | null {
     features: { analytics: false, email: false, socials: false, swaps: false, onramp: false, send: false },
     themeMode: "light",
   });
+  watchResume();
   return kit;
 }
 

@@ -60,6 +60,50 @@ let adapter: WagmiAdapter | null = null;
 
 export class WalletError extends Error {}
 
+/*
+ * Returning from the wallet app.
+ *
+ * On a phone the user approves in the wallet app while Telegram is in the background. The OS suspends the
+ * webview, which silently kills WalletConnect's relay socket, and WalletConnect only watches for a dead socket
+ * in Node (its ping timeout is skipped in browsers). The wallet's answer (connection approval, signature,
+ * transaction hash) then waits at the relay and never arrives: the modal stays on "Continue in <wallet>".
+ * So whenever the app comes back after a real absence, restart the relay connection; it resubscribes and
+ * the waiting answer is delivered.
+ */
+const MIN_AWAY_MS = 2000;
+let hiddenAt = 0;
+const resumeListeners = new Set<() => void>();
+
+async function reviveRelay() {
+  try {
+    const provider = await kit?.getUniversalProvider();
+    await provider?.client?.core?.relayer?.restartTransport();
+  } catch {
+    // Offline or no session yet: nothing to revive. A later resume tries again.
+  }
+}
+
+function onLeave() {
+  hiddenAt = Date.now();
+}
+
+function onReturn() {
+  if (!hiddenAt || Date.now() - hiddenAt < MIN_AWAY_MS) return; // a quick blink is not a trip to the wallet
+  hiddenAt = 0;
+  void reviveRelay().then(() => resumeListeners.forEach((fn) => fn()));
+}
+
+function watchResume() {
+  document.addEventListener("visibilitychange", () =>
+    document.visibilityState === "hidden" ? onLeave() : onReturn(),
+  );
+  // Telegram (Bot API 8.0+) also reports the mini app leaving and returning to the foreground, in cases where
+  // the webview stays "visible". Whichever fires first handles the return; the other is then a no-op.
+  const tg = (window as { Telegram?: { WebApp?: { onEvent?: (e: string, cb: () => void) => void } } }).Telegram?.WebApp;
+  tg?.onEvent?.("deactivated", onLeave);
+  tg?.onEvent?.("activated", onReturn);
+}
+
 function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -91,6 +135,7 @@ export function init(chainId: number) {
     themeMode: theme,
     themeVariables: { "--w3m-accent": cssVar("--accent"), "--w3m-font-family": "Inter, -apple-system, system-ui, sans-serif" },
   });
+  watchResume();
 }
 
 function config() {
@@ -112,26 +157,44 @@ export function connect(): Promise<string> {
   return new Promise((resolve, reject) => {
     let seenOpen = false;
     let done = false;
+    let cancelTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (fn: () => void) => {
       if (done) return;
       done = true;
+      clearTimeout(cancelTimer);
       unsubAccount();
       unsubState();
+      resumeListeners.delete(checkConnected);
       fn();
     };
+    const succeed = (a: string) =>
+      finish(() => {
+        k.close();
+        resolve(a);
+      });
+    // After returning from the wallet app the relay is revived (see reviveRelay); pick up the account then.
+    const checkConnected = () => {
+      const a = address() || (k.getAccount()?.isConnected ? k.getAccount()?.address : undefined);
+      if (a) succeed(a);
+    };
+    resumeListeners.add(checkConnected);
     const unsubAccount = k.subscribeAccount((s) => {
       const a = address() || (s.isConnected ? s.address : undefined);
-      if (a) {
-        finish(() => {
-          k.close();
-          resolve(a);
-        });
-      }
+      if (a) succeed(a);
     });
     const unsubState = k.subscribeState((s) => {
-      if (s.open) seenOpen = true;
-      else if (seenOpen && !address()) {
-        finish(() => reject(new WalletError("Wallet connection was cancelled. Try again.")));
+      if (s.open) {
+        seenOpen = true;
+        clearTimeout(cancelTimer);
+      } else if (seenOpen && !address()) {
+        // AppKit closes the modal right after a successful connection; give the account a moment to land
+        // before treating the close as a cancel.
+        clearTimeout(cancelTimer);
+        cancelTimer = setTimeout(() => {
+          const a = address();
+          if (a) succeed(a);
+          else finish(() => reject(new WalletError("Wallet connection was cancelled. Try again.")));
+        }, 1500);
       }
     });
     k.open({ view: "Connect" }).catch(() =>
