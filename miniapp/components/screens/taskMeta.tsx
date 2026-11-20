@@ -12,6 +12,16 @@ export const TASK_ICON: Record<Task["key"], ReactNode> = {
   join_channel: <Megaphone {...ic} />,
 };
 
+/** X (Twitter) activities are hidden for now. Set to true to bring them back everywhere in the app. */
+export const X_ENABLED = false;
+
+const X_TASKS: Task["key"][] = ["x_post", "x_bio", "x_connect"];
+
+/** False for tasks that are hidden in the app right now. */
+export function taskVisible(t: Task): boolean {
+  return X_ENABLED || !X_TASKS.includes(t.key);
+}
+
 export const TASK_ACTION: Record<Task["key"], string> = {
   spin: "Spin",
   x_post: "Add post",

@@ -8,6 +8,7 @@ import { shortAddress } from "@/lib/format";
 import { haptic, openLink } from "@/lib/telegram";
 import { useApp } from "../AppContext";
 import { ic } from "../Common";
+import { X_ENABLED } from "./taskMeta";
 import { BottomSheet, Button, ListRow, RowIcon, Toggle, useToast } from "../ui";
 
 export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -80,18 +81,20 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
             )
           }
         />
-        <ListRow
-          leading={<RowIcon><AtSign {...ic} /></RowIcon>}
-          title="X account"
-          subtitle={me.x_username ? `@${me.x_username}` : "Not connected"}
-          trailing={
-            me.x_username ? null : (
-              <Button size="compact" loading={xBusy} onClick={connectX}>
-                Connect
-              </Button>
-            )
-          }
-        />
+        {X_ENABLED && (
+          <ListRow
+            leading={<RowIcon><AtSign {...ic} /></RowIcon>}
+            title="X account"
+            subtitle={me.x_username ? `@${me.x_username}` : "Not connected"}
+            trailing={
+              me.x_username ? null : (
+                <Button size="compact" loading={xBusy} onClick={connectX}>
+                  Connect
+                </Button>
+              )
+            }
+          />
+        )}
         <ListRow leading={<RowIcon><Globe {...ic} /></RowIcon>} title="Language" trailing={<span className="t-caption">English</span>} />
         <ListRow
           leading={<RowIcon><Info {...ic} /></RowIcon>}

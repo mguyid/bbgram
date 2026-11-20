@@ -10,7 +10,7 @@ import { useApi } from "@/lib/useApi";
 import { useApp } from "../AppContext";
 import { ErrorCard, ic, Screen, ScreenHeader } from "../Common";
 import { BottomSheet, Button, Card, Chip, EmptyState, ListRow, RowIcon, Skeleton, useToast } from "../ui";
-import { TASK_ACTION, TASK_ICON } from "./taskMeta";
+import { TASK_ACTION, TASK_ICON, taskVisible, X_ENABLED } from "./taskMeta";
 
 const X_POST_RE = /^https?:\/\/(www\.|mobile\.)?(x|twitter)\.com\/[A-Za-z0-9_]+\/status\/\d+/;
 
@@ -18,7 +18,8 @@ export function Tasks() {
   const { go, openWallet, refreshMe } = useApp();
   const toast = useToast();
   const tasks = useApi<{ tasks: Task[] }>("/api/tasks");
-  const x = useApi<XState>("/api/x");
+  const x = useApi<XState>(X_ENABLED ? "/api/x" : null);
+  const list = tasks.data?.tasks.filter(taskVisible);
   const [sheet, setSheet] = useState<"post" | "bio" | null>(null);
   const [busy, setBusy] = useState<Task["key"] | null>(null);
   const [joinOpened, setJoinOpened] = useState(false);
@@ -117,7 +118,7 @@ export function Tasks() {
   return (
     <Screen>
       <ScreenHeader title="Tasks" />
-      {!tasks.data ? (
+      {!list ? (
         tasks.error ? (
           <ErrorCard message={tasks.error.message} onRetry={tasks.reload} />
         ) : (
@@ -128,14 +129,14 @@ export function Tasks() {
             <Skeleton height={170} />
           </>
         )
-      ) : tasks.data.tasks.length === 0 ? (
+      ) : list.length === 0 ? (
         <Card>
           <EmptyState text="No tasks right now. Check back later." />
         </Card>
       ) : (
         <>
-          {renderSection("Daily", tasks.data.tasks.filter((t) => t.section === "daily"))}
-          {renderSection("One-time", tasks.data.tasks.filter((t) => t.section === "one_time"))}
+          {renderSection("Daily", list.filter((t) => t.section === "daily"))}
+          {renderSection("One-time", list.filter((t) => t.section === "one_time"))}
         </>
       )}
       <PostSheet

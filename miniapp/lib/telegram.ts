@@ -85,15 +85,10 @@ export function shareUrl(link: string, text: string) {
   );
 }
 
-/** Applies the theme from Telegram (or the OS outside Telegram) and syncs Telegram chrome colours. */
+/** Applies the app's single dark theme and syncs Telegram's header and background colours to it. */
 export function applyTheme() {
   const w = tg();
-  const scheme =
-    w && w.initData
-      ? w.colorScheme
-      : window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light";
+  const scheme = "dark";
   document.documentElement.dataset.theme = scheme;
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
   if (w && w.initData && bg) {

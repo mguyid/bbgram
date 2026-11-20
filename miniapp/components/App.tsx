@@ -210,7 +210,9 @@ function Shell() {
                 window.scrollTo(0, 0);
               }}
             >
-              <Icon {...ic} />
+              <span className="tab-icon">
+                <Icon {...ic} />
+              </span>
               {label}
             </button>
           ))}

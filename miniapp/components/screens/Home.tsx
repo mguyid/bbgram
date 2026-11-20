@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Coins, RotateCw, TriangleAlert } from "lucide-react";
+import { ChevronRight, Coins, RotateCw, TrendingUp, Trophy, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { api, presaleReady, type Presale, type SpinState, type Task } from "@/lib/api";
 import { displayName, percent, points, shortDuration } from "@/lib/format";
@@ -10,14 +10,14 @@ import { useApi } from "@/lib/useApi";
 import { useApp } from "../AppContext";
 import { ErrorCard, ic, Screen, ScreenHeader } from "../Common";
 import { Avatar, Card, Chip, Countdown, EmptyState, ListRow, RowIcon, Skeleton, useNow, useToast } from "../ui";
-import { TASK_ICON } from "./taskMeta";
+import { TASK_ICON, taskVisible } from "./taskMeta";
 
 export function Home() {
   const { me } = useApp();
   const [fly, setFly] = useState<{ id: number; points: number } | null>(null);
   return (
     <Screen>
-      <ScreenHeader title="Baby Grand" />
+      <ScreenHeader title="Baby Grand" brand />
       {me.banned && (
         <Card>
           <div className="hrow c-danger">
@@ -35,16 +35,30 @@ export function Home() {
 }
 
 function Hero({ fly }: { fly: { id: number; points: number } | null }) {
-  const { me } = useApp();
+  const { me, go } = useApp();
   const balance = useCountUp(me.balance);
   const name = displayName(me);
   return (
     <section className="hero" aria-label="Your points">
-      <span className="t-micro eyebrow">Your points</span>
-      <span className="t-display num" aria-live="polite">
-        {points(balance)}
-      </span>
-      {me.today_delta > 0 && <Chip className="delta">+{points(me.today_delta)} today</Chip>}
+      <div className="hero-orb" aria-hidden />
+      <div className="between">
+        <span className="t-micro eyebrow">Your points</span>
+        <button type="button" className="chip rank-pill" onClick={() => go("leaderboard")}>
+          <Trophy size={12} strokeWidth={2} aria-hidden />
+          {me.rank ? `Rank #${points(me.rank)}` : "Unranked"}
+        </button>
+      </div>
+      <div className="hero-balance">
+        <span className="t-display num" aria-live="polite">
+          {points(balance)}
+        </span>
+        <span className="hero-unit">PTS</span>
+      </div>
+      {me.today_delta > 0 && (
+        <Chip tone="success" className="delta">
+          <TrendingUp size={12} strokeWidth={2} aria-hidden />+{points(me.today_delta)} today
+        </Chip>
+      )}
       {fly && (
         <span key={fly.id} className="fly num" aria-hidden>
           +{points(fly.points)}
@@ -53,7 +67,6 @@ function Hero({ fly }: { fly: { id: number; points: number } | null }) {
       <div className="hero-user">
         <Avatar src={me.photo_url} name={name} size={32} />
         <span className="t-strong ellipsis">{name}</span>
-        <Chip className="rank-pill">{me.rank ? `Rank #${points(me.rank)}` : "Unranked"}</Chip>
       </div>
     </section>
   );
@@ -106,7 +119,15 @@ function SpinCard({ onWin }: { onWin: (points: number) => void }) {
   return (
     <Card className="spin-card">
       <div className="spin-wrap">
+        <div className="spin-glow" aria-hidden />
         <svg className="spin-ring" viewBox="0 0 144 144" aria-hidden>
+          <defs>
+            <linearGradient id="spin-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#a78bfa" />
+              <stop offset="55%" stopColor="#6366f1" />
+              <stop offset="100%" stopColor="#22d3ee" />
+            </linearGradient>
+          </defs>
           <circle className="track" cx="72" cy="72" r="66" />
           <circle className="fill" cx="72" cy="72" r="66" strokeDasharray={RING} strokeDashoffset={RING * (1 - fill)} />
         </svg>
@@ -169,8 +190,11 @@ function PresaleStrip() {
   }
   return (
     <button type="button" className="card cta-strip" onClick={() => go("presale")}>
-      <Coins {...ic} className="c-gold" />
-      <span className="grow t-strong ellipsis t-caption">{text}</span>
+      <span className="row-icon gold">
+        <Coins {...ic} />
+      </span>
+      {p?.status === "live" && presaleReady(p) && <span className="live-dot" aria-hidden />}
+      <span className="grow t-strong t-caption">{text}</span>
       <ChevronRight {...ic} className="muted" />
     </button>
   );
@@ -184,7 +208,7 @@ function QuickTasks() {
     return <Skeleton height={176} />;
   }
   const top = tasks.data.tasks
-    .filter((t) => t.state === "todo" && t.key !== "spin")
+    .filter((t) => t.state === "todo" && t.key !== "spin" && taskVisible(t))
     .sort((a, b) => b.reward - a.reward)
     .slice(0, 3);
   return (
