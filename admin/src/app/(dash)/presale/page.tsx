@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { Camera, Coins, RotateCcw, Save, Send, Users } from "lucide-react";
+import { Camera, Coins, Pause, Play, RotateCcw, Save, Send, Trash2, Users } from "lucide-react";
 import { api, useGet } from "@/lib/api";
 import { useAdmin, useCanEdit } from "@/lib/auth";
 import { formatDate, formatNumber, formatWei } from "@/lib/format";
@@ -45,6 +45,18 @@ type Summary = {
   closed_at: string | null;
   credited: number;
   last_block: number | null;
+  progress_wei: string;
+  progress_target_wei: string;
+  progress_reset_at: string | null;
+  simulated_wei: string;
+  sim_running: boolean;
+};
+type Simulated = {
+  running: boolean;
+  count: number;
+  total_wei: string;
+  next_at: string | null;
+  items: { id: number; wallet_address: string; amount_wei: string; created_at: string }[];
 };
 type Allocation = {
   wallet_address: string;
@@ -222,6 +234,276 @@ function TermsForm({ config, closed, onSaved }: { config: Config; closed: boolea
   );
 }
 
+// ---------- progress bar (display only) ----------
+
+function percentOf(part: string, whole: string): number {
+  const w = BigInt(whole || "0");
+  if (w <= 0n) return 0;
+  return Math.min(100, Number((BigInt(part || "0") * 10000n) / w) / 100);
+}
+
+function ProgressPanel({ summary, config, onChanged }: { summary: Summary; config: Config; onChanged: () => void }) {
+  const canEdit = useCanEdit();
+  const initial = String(config.presale_progress_target_usdt ?? 0);
+  const [target, setTarget] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok?: string; err?: string }>({});
+  const pct = percentOf(summary.progress_wei, summary.progress_target_wei);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    const v = target.trim();
+    if (!/^\d+$/.test(v)) return setMsg({ err: "Target: enter a whole number of USDT (0 = use the hard cap)." });
+    setBusy(true);
+    setMsg({});
+    try {
+      await api("/config", { method: "PUT", body: { presale_progress_target_usdt: Number(v) } });
+      setMsg({ ok: "Saved." });
+      onChanged();
+    } catch (err) {
+      setMsg({ err: (err as Error).message });
+    }
+    setBusy(false);
+  };
+
+  return (
+    <form className="card stack" onSubmit={save}>
+      <div className="card-head" style={{ marginBottom: 0 }}>
+        <div>
+          <h3>Progress bar</h3>
+          <p>
+            The bar on the mini app&apos;s Presale screen. It fills with contributions (real and simulated) since the
+            last reset. Display only: resetting never changes contributions, totals or allocations.
+          </p>
+        </div>
+      </div>
+      <div className="stack" style={{ gap: 6 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <strong>
+            {formatWei(summary.progress_wei, 2)} / {formatWei(summary.progress_target_wei, 2)} USDT
+          </strong>
+          <span className="muted">{pct.toFixed(1)}%</span>
+        </div>
+        <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+          <div style={{ width: `${pct}%` }} />
+        </div>
+        <div className="muted small">
+          {summary.progress_reset_at ? `Counting since the reset on ${formatDate(summary.progress_reset_at)}.` : "Never reset."}
+          {BigInt(summary.progress_target_wei || "0") === 0n && " Set a target or a hard cap to fill the bar."}
+        </div>
+      </div>
+      <label className="field" style={{ maxWidth: 320 }}>
+        <span>
+          Target (USDT) <span className="muted">— 0 = use the hard cap</span>
+        </span>
+        <input value={target} disabled={!canEdit || busy} inputMode="numeric" onChange={(e) => setTarget(e.target.value)} />
+      </label>
+      <SuccessBox message={msg.ok} />
+      <ErrorBox error={msg.err} />
+      {canEdit && (
+        <div className="row">
+          <button className="btn primary" type="submit" disabled={busy || target === initial}>
+            <Save size={16} /> {busy ? "Saving…" : "Save target"}
+          </button>
+          <ConfirmButton
+            label={
+              <>
+                <RotateCcw size={14} /> Reset progress
+              </>
+            }
+            title="Reset the progress bar?"
+            message="The bar restarts at 0 and counts only contributions from now on. Contributions, totals, allocations and the snapshot are not changed."
+            confirmLabel="Reset progress"
+            onConfirm={async () => {
+              await api("/presale/progress/reset", { method: "POST" });
+              onChanged();
+            }}
+          />
+        </div>
+      )}
+    </form>
+  );
+}
+
+// ---------- simulated contributions ----------
+
+type SimForm = { min: string; max: string; minS: string; maxS: string; cap: string };
+
+function simFormOf(c: Config): SimForm {
+  const s = (k: string) => String(c[k] ?? "");
+  return {
+    min: s("presale_sim_min_usdt"),
+    max: s("presale_sim_max_usdt"),
+    minS: s("presale_sim_min_seconds"),
+    maxS: s("presale_sim_max_seconds"),
+    cap: s("presale_sim_cap_usdt"),
+  };
+}
+
+function SimulationPanel({ config, onChanged }: { config: Config; onChanged: () => void }) {
+  const canEdit = useCanEdit();
+  const sim = useGet<Simulated>("/presale/simulated");
+  const running = config.presale_sim_running === true;
+  const initial = simFormOf(config);
+  const [f, setF] = useState<SimForm>(initial);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok?: string; err?: string }>({});
+  const dirty = (Object.keys(f) as (keyof SimForm)[]).some((k) => f[k] !== initial[k]);
+  const set = (patch: Partial<SimForm>) => setF({ ...f, ...patch });
+
+  const put = async (body: Config, ok: string) => {
+    setBusy(true);
+    setMsg({});
+    try {
+      await api("/config", { method: "PUT", body });
+      setMsg({ ok });
+      onChanged();
+      sim.reload();
+    } catch (err) {
+      setMsg({ err: (err as Error).message });
+    }
+    setBusy(false);
+  };
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    const fields: [keyof SimForm, string, string][] = [
+      ["min", "presale_sim_min_usdt", "Minimum amount"],
+      ["max", "presale_sim_max_usdt", "Maximum amount"],
+      ["minS", "presale_sim_min_seconds", "Minimum interval"],
+      ["maxS", "presale_sim_max_seconds", "Maximum interval"],
+      ["cap", "presale_sim_cap_usdt", "Cap"],
+    ];
+    const body: Config = {};
+    for (const [k, key, label] of fields) {
+      const v = f[k].trim();
+      if (!/^\d+$/.test(v)) return setMsg({ err: `${label}: enter a whole number.` });
+      body[key] = Number(v);
+    }
+    if (Number(f.min) > Number(f.max)) return setMsg({ err: "The minimum amount cannot be above the maximum." });
+    if (Number(f.minS) < 1) return setMsg({ err: "The minimum interval must be at least 1 second." });
+    if (Number(f.minS) > Number(f.maxS)) return setMsg({ err: "The minimum interval cannot be above the maximum." });
+    await put(body, "Saved.");
+  };
+
+  const d = sim.data;
+  return (
+    <form className="card stack" onSubmit={save}>
+      <div className="card-head" style={{ marginBottom: 0 }}>
+        <div>
+          <h3>
+            Simulated contributions{" "}
+            <span className={`badge ${running ? "green" : "plain"}`}>{running ? "running" : "stopped"}</span>
+          </h3>
+          <p>
+            While running, adds a contribution of a random amount at random intervals within the ranges below. They show in
+            the mini app&apos;s recent contributions list (tagged &quot;Simulated&quot;) and move the progress bar. They are
+            never counted as raised, toward the hard cap, allocations, the snapshot or crediting.
+          </p>
+        </div>
+      </div>
+      <div className="inline">
+        <label className="field" style={{ flex: 1, minWidth: 140 }}>
+          <span>Min amount (USDT)</span>
+          <input value={f.min} disabled={!canEdit || busy} inputMode="numeric" onChange={(e) => set({ min: e.target.value })} />
+        </label>
+        <label className="field" style={{ flex: 1, minWidth: 140 }}>
+          <span>Max amount (USDT)</span>
+          <input value={f.max} disabled={!canEdit || busy} inputMode="numeric" onChange={(e) => set({ max: e.target.value })} />
+        </label>
+        <label className="field" style={{ flex: 1, minWidth: 140 }}>
+          <span>Min interval (seconds)</span>
+          <input value={f.minS} disabled={!canEdit || busy} inputMode="numeric" onChange={(e) => set({ minS: e.target.value })} />
+        </label>
+        <label className="field" style={{ flex: 1, minWidth: 140 }}>
+          <span>Max interval (seconds)</span>
+          <input value={f.maxS} disabled={!canEdit || busy} inputMode="numeric" onChange={(e) => set({ maxS: e.target.value })} />
+        </label>
+        <label className="field" style={{ flex: 1, minWidth: 140 }}>
+          <span>
+            Total cap (USDT) <span className="muted">— 0 = none</span>
+          </span>
+          <input value={f.cap} disabled={!canEdit || busy} inputMode="numeric" onChange={(e) => set({ cap: e.target.value })} />
+        </label>
+      </div>
+      <SuccessBox message={msg.ok} />
+      <ErrorBox error={msg.err} />
+      {canEdit && (
+        <div className="row">
+          <button className="btn primary" type="submit" disabled={busy || !dirty}>
+            <Save size={16} /> Save ranges
+          </button>
+          {running ? (
+            <button className="btn" type="button" disabled={busy} onClick={() => put({ presale_sim_running: false }, "Stopped.")}>
+              <Pause size={16} /> Stop
+            </button>
+          ) : (
+            <button
+              className="btn"
+              type="button"
+              disabled={busy || dirty}
+              title={dirty ? "Save the ranges first" : undefined}
+              onClick={() => put({ presale_sim_running: true }, "Started. The first one is added after a random interval.")}
+            >
+              <Play size={16} /> Start
+            </button>
+          )}
+          <ConfirmButton
+            label={
+              <>
+                <Trash2 size={14} /> Clear simulated
+              </>
+            }
+            title="Delete all simulated contributions?"
+            message="Removes them from the mini app's list and the progress bar. Real contributions are not touched."
+            confirmLabel="Delete"
+            disabled={!d?.count}
+            onConfirm={async () => {
+              await api("/presale/simulated", { method: "DELETE" });
+              sim.reload();
+              onChanged();
+            }}
+          />
+        </div>
+      )}
+      <ErrorBox error={sim.error} />
+      {d && (
+        <>
+          <div className="muted small">
+            {formatNumber(d.count)} simulated · {formatWei(d.total_wei, 2)} USDT
+            {d.next_at && <> · next around {formatDate(d.next_at)}</>}
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Wallet (random)</th>
+                  <th className="num">Amount (USDT)</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.items.slice(0, 20).map((i) => (
+                  <tr key={i.id}>
+                    <td>
+                      <Addr value={i.wallet_address} />
+                    </td>
+                    <td className="num">{formatWei(i.amount_wei, 2)}</td>
+                    <td>
+                      <DateCell value={i.created_at} />
+                    </td>
+                  </tr>
+                ))}
+                {!d.items.length && <EmptyRow cols={3} title="None yet" text="Start the simulation to add some." />}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </form>
+  );
+}
+
 // ---------- page ----------
 
 export default function PresalePage() {
@@ -306,6 +588,21 @@ export default function PresalePage() {
       {/* key remounts the form with fresh values after each load */}
       {config.data && (
         <TermsForm key={JSON.stringify(config.data)} config={config.data} closed={closed} onSaved={reloadAll} />
+      )}
+      {config.data && s && (
+        <div style={{ marginTop: 14 }}>
+          <ProgressPanel
+            key={`progress-${config.data.presale_progress_target_usdt}`}
+            summary={s}
+            config={config.data}
+            onChanged={reloadAll}
+          />
+        </div>
+      )}
+      {config.data && (
+        <div style={{ marginTop: 14 }}>
+          <SimulationPanel key={`sim-${JSON.stringify(simFormOf(config.data))}`} config={config.data} onChanged={reloadAll} />
+        </div>
       )}
 
       <h2>

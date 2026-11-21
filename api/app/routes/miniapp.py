@@ -415,6 +415,7 @@ async def presale(user: User = Depends(current_user), session: AsyncSession = De
         "tokens_per_usdt_wei": str(t.tokens_per_usdt_wei), "min_wei": str(t.min_wei), "max_wei": str(t.max_wei),
         "chain_id": rt.chain_id_int, "presale_wallet": rt.presale_wallet or None, "usdt_address": rt.usdt or None,
         "contributed_wei": "0", "counted_wei": "0", "tokens_wei": "0", "credited": False, "credited_tx": None,
+        **await presale_mod.progress_json(session),
     }
     if not wallet:
         return out
@@ -431,6 +432,12 @@ async def presale(user: User = Depends(current_user), session: AsyncSession = De
         counted, tokens = presale_mod.allocation(paid, t)
         out.update({"contributed_wei": str(paid), "counted_wei": str(counted), "tokens_wei": str(tokens)})
     return out
+
+
+@router.get("/presale/activity")
+async def presale_activity(user: User = Depends(current_user), session: AsyncSession = Depends(get_session)):
+    """Latest presale contributions for the activity list; simulated ones are flagged."""
+    return {"items": await presale_mod.activity(session)}
 
 
 # ---------- airdrop ----------

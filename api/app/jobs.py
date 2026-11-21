@@ -1,6 +1,7 @@
 """Background jobs run by the worker (also callable from tests)."""
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -8,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import chain, runtime, telegram
+from app import presale as presale_mod
 from app.config_store import get_config
 from app.models import PresaleContribution, Spin, User, Wallet, XPost
 from app.points import add_points
@@ -16,6 +18,7 @@ from app.settings import settings
 
 log = logging.getLogger(__name__)
 INDEXER_KEY = "presale:last_block"
+SIM_NEXT_KEY = "presale:sim:next_at"  # unix time of the next simulated contribution
 
 
 async def send_spin_reminders(session: AsyncSession) -> int:
@@ -86,3 +89,23 @@ async def index_presale(session: AsyncSession) -> int:
     await session.commit()
     await redis.set(INDEXER_KEY, scanned_to)
     return len(logs)
+
+
+async def simulate_presale(session: AsyncSession) -> int:
+    """While simulation is running, add one simulated contribution each time a random wait (within the configured
+    range) has passed. Returns 1 when one was added. Stopping clears the schedule; starting begins a new wait."""
+    cfg = await get_config(session)
+    if not cfg["presale_sim_running"]:
+        await redis.delete(SIM_NEXT_KEY)
+        return 0
+    now = time.time()
+    due = await redis.get(SIM_NEXT_KEY)
+    if due is None:
+        await redis.set(SIM_NEXT_KEY, now + presale_mod.next_delay(cfg))
+        return 0
+    if now < float(due):
+        return 0
+    row = await presale_mod.add_simulated(session, cfg)
+    await session.commit()
+    await redis.set(SIM_NEXT_KEY, now + presale_mod.next_delay(cfg))
+    return 1 if row else 0

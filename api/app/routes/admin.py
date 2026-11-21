@@ -7,7 +7,7 @@ from eth_utils import is_address, to_checksum_address
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import backup, chain, jobs, runtime, telegram
@@ -23,6 +23,7 @@ from app.models import (
     Ban,
     PointEvent,
     PresaleContribution,
+    PresaleSimulated,
     Referral,
     RiskScore,
     Snapshot,
@@ -586,7 +587,44 @@ async def presale_summary(admin: Admin = Depends(current_admin), session: AsyncS
         "tokens_per_usdt_wei": str(t.tokens_per_usdt_wei), "min_wei": str(t.min_wei), "max_wei": str(t.max_wei),
         "presale_wallet": rt.presale_wallet or None, "closed_at": presale_mod.iso(t.closed_at),
         "credited": await presale_mod.credited_count(session), "last_block": int(last) if last else None,
+        **await presale_mod.progress_json(session),
+        "simulated_wei": str(await presale_mod.simulated_total(session)),
+        "sim_running": bool((await get_config(session))["presale_sim_running"]),
     }
+
+
+@router.post("/presale/progress/reset")
+async def presale_progress_reset(admin: Admin = Depends(writer_admin), session: AsyncSession = Depends(get_session)):
+    """Restart the progress bar at 0. Display only: no contribution, total or allocation changes."""
+    await presale_mod.reset_progress(session)
+    await audit(session, admin, "presale.progress_reset")
+    await session.commit()
+    return await presale_mod.progress_json(session)
+
+
+@router.get("/presale/simulated")
+async def presale_simulated(admin: Admin = Depends(current_admin), session: AsyncSession = Depends(get_session)):
+    cfg = await get_config(session)
+    rows = (await session.execute(
+        select(PresaleSimulated).order_by(PresaleSimulated.id.desc()).limit(200))).scalars().all()
+    count = (await session.execute(select(func.count()).select_from(PresaleSimulated))).scalar_one()
+    due = await redis.get(jobs.SIM_NEXT_KEY)
+    return {
+        "running": bool(cfg["presale_sim_running"]), "count": count,
+        "total_wei": str(await presale_mod.simulated_total(session)),
+        "next_at": presale_mod.iso(datetime.fromtimestamp(float(due), UTC)) if due and cfg["presale_sim_running"]
+        else None,
+        "items": [{"id": r.id, "wallet_address": r.wallet_address, "amount_wei": str(int(r.amount_wei)),
+                   "created_at": presale_mod.iso(r.created_at)} for r in rows],
+    }
+
+
+@router.delete("/presale/simulated")
+async def presale_simulated_clear(admin: Admin = Depends(writer_admin), session: AsyncSession = Depends(get_session)):
+    deleted = (await session.execute(delete(PresaleSimulated))).rowcount
+    await audit(session, admin, "presale.simulated_clear", None, {"deleted": deleted})
+    await session.commit()
+    return {"deleted": deleted}
 
 
 @router.get("/presale/allocations")

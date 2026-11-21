@@ -40,6 +40,7 @@ async def main() -> None:
     scheduler.add_job(with_session(jobs.accrue_x_daily), "cron", minute=5, **opts)
     scheduler.add_job(with_session(compute_risk_scores), "cron", hour=3, minute=0, **opts)
     scheduler.add_job(with_session(jobs.index_presale), "interval", seconds=30, **opts)
+    scheduler.add_job(with_session(jobs.simulate_presale), "interval", seconds=2, **opts)
     scheduler.add_job(ensure_bot, "interval", minutes=10, **opts)
     scheduler.start()
     await ensure_bot()  # after a redeploy, point the bot at this API again if needed

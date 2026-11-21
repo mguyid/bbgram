@@ -179,7 +179,9 @@ function PresaleStrip() {
   else if (p && p.start_at && p.end_at) {
     // "N% filled" only makes sense with a hard cap (0 = no cap).
     const filled =
-      BigInt(p.hard_cap_wei || "0") > BigInt(0) ? ` · ${Math.floor(percent(p.raised_wei, p.hard_cap_wei))}% filled` : "";
+      BigInt(p.progress_target_wei || "0") > BigInt(0)
+        ? ` · ${Math.floor(percent(p.progress_wei, p.progress_target_wei))}% filled`
+        : "";
     const toEnd = shortDuration(new Date(p.end_at).getTime() - now);
     if (p.status === "live") text = `Presale live${filled} · ends in ${toEnd}`;
     else if (p.status === "upcoming")

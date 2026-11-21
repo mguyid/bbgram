@@ -38,6 +38,7 @@ from app.redis_client import redis  # noqa: E402
 
 TABLES = [
     "airdrop_proofs", "airdrops", "snapshot_balances", "snapshots", "presale_contributions", "presale_allocations",
+    "presale_simulated",
     "admin_audit_log", "bans", "admins", "risk_scores", "screen_views", "user_devices", "x_posts", "x_accounts",
     "wallets", "spins", "point_events", "referrals", "users", "runtime_settings",
 ]

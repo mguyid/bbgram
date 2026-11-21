@@ -85,6 +85,19 @@ export type Presale = {
   tokens_wei: string;
   credited: boolean;
   credited_tx: string | null;
+  /** Progress bar (display only): contributions since the admin's last reset, and the target it fills towards. */
+  progress_wei: string;
+  progress_target_wei: string;
+  progress_reset_at: string | null;
+};
+
+/** One row of the presale's recent contributions list. */
+export type PresaleActivityItem = {
+  wallet_address: string;
+  amount_wei: string;
+  at: string;
+  tx_hash: string | null;
+  simulated: boolean;
 };
 
 export type Airdrop = {

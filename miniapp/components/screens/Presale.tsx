@@ -1,9 +1,9 @@
 "use client";
 
-import { Check, ExternalLink, Gift } from "lucide-react";
-import { useState, type ReactNode } from "react";
-import { presaleReady, type Airdrop, type Presale } from "@/lib/api";
-import { date, percent, shortAddress, tokenPrice, tokens, usdt } from "@/lib/format";
+import { Check, Coins, ExternalLink, Gift } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { presaleReady, type Airdrop, type Presale, type PresaleActivityItem } from "@/lib/api";
+import { date, percent, shortAddress, shortDuration, tokenPrice, tokens, usdt } from "@/lib/format";
 import { explorerTx } from "@/lib/loadWallet";
 import { openLink } from "@/lib/telegram";
 import type { WalletModule } from "@/lib/loadWallet";
@@ -11,7 +11,7 @@ import { useApi } from "@/lib/useApi";
 import { useApp } from "../AppContext";
 import { ErrorCard, ic, Screen, ScreenHeader } from "../Common";
 import { runTx, TxStatus, type Tx } from "../TxStatus";
-import { Button, Card, Chip, Countdown, EmptyState, ProgressBar, Skeleton, useNow } from "../ui";
+import { Button, Card, Chip, Countdown, EmptyState, ListRow, ProgressBar, RowIcon, Skeleton, useNow } from "../ui";
 
 const STATUS: Record<Presale["status"], { label: string; tone: "success" | "accent" | "warning" | "default" }> = {
   live: { label: "Live", tone: "success" },
@@ -21,10 +21,24 @@ const STATUS: Record<Presale["status"], { label: string; tone: "success" | "acce
   closed: { label: "Closed", tone: "default" },
 };
 
+const REFRESH_MS = 30_000;
+
 export function PresaleScreen() {
   const presale = useApi<Presale>("/api/presale");
   const airdrop = useApi<Airdrop>("/api/airdrop");
+  const activity = useApi<{ items: PresaleActivityItem[] }>("/api/presale/activity");
   const p = presale.data;
+  const reloadPresale = presale.reload;
+  const reloadActivity = activity.reload;
+
+  // Keep the progress bar and the contributions list moving while the screen is open.
+  useEffect(() => {
+    const id = setInterval(() => {
+      reloadPresale();
+      reloadActivity();
+    }, REFRESH_MS);
+    return () => clearInterval(id);
+  }, [reloadPresale, reloadActivity]);
 
   return (
     <Screen>
@@ -53,6 +67,7 @@ export function PresaleScreen() {
           <ProgressCard p={p} onTick={presale.reload} />
           <ActionCard p={p} />
           {BigInt(p.contributed_wei || "0") > BigInt(0) && <AllocationCard p={p} />}
+          <ActivityCard items={activity.data?.items} chainId={p.chain_id ?? 56} />
         </>
       )}
       {airdrop.data?.available && BigInt(airdrop.data.amount_wei || "0") > BigInt(0) && (
@@ -67,11 +82,11 @@ function ProgressCard({ p, onTick }: { p: Presale; onTick: () => void }) {
   return (
     <Card title="Baby Grand presale" action={<Chip tone={s.tone}>{s.label}</Chip>}>
       <div className="stack">
-        {BigInt(p.hard_cap_wei || "0") > BigInt(0) ? (
+        {BigInt(p.progress_target_wei || "0") > BigInt(0) ? (
           <ProgressBar
-            value={percent(p.raised_wei, p.hard_cap_wei)}
-            label="Raised"
-            right={`${usdt(p.raised_wei)} / ${usdt(p.hard_cap_wei)}`}
+            value={percent(p.progress_wei, p.progress_target_wei)}
+            label="Progress"
+            right={`${usdt(p.progress_wei)} / ${usdt(p.progress_target_wei)}`}
           />
         ) : (
           <div className="between">
@@ -259,6 +274,45 @@ function AirdropCard({ a, chainId, onClaimed }: { a: Airdrop; chainId: number; o
           </>
         )}
       </div>
+    </Card>
+  );
+}
+
+function ago(ms: number): string {
+  return ms < 60_000 ? "just now" : `${shortDuration(ms)} ago`;
+}
+
+function ActivityCard({ items, chainId }: { items?: PresaleActivityItem[]; chainId: number }) {
+  const now = useNow();
+  if (!items) return <Skeleton height={180} />;
+  return (
+    <Card title="Recent contributions" flush>
+      {items.length === 0 ? (
+        <EmptyState text="No contributions yet." />
+      ) : (
+        <div className="list">
+          {items.map((i, n) => (
+            <ListRow
+              key={`${i.tx_hash ?? "sim"}-${i.at}-${n}`}
+              leading={
+                <RowIcon>
+                  <Coins size={18} strokeWidth={1.75} />
+                </RowIcon>
+              }
+              title={<span className="mono">{shortAddress(i.wallet_address)}</span>}
+              subtitle={ago(now - new Date(i.at).getTime())}
+              onClick={i.tx_hash ? () => openLink(explorerTx(chainId, i.tx_hash || "")) : undefined}
+              trailing={
+                <>
+                  {i.simulated && <Chip>Simulated</Chip>}
+                  <span className="t-strong num c-success">+{usdt(i.amount_wei)}</span>
+                  {i.tx_hash && <ExternalLink size={16} strokeWidth={1.75} aria-label="View on BscScan" />}
+                </>
+              }
+            />
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

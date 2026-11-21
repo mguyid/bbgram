@@ -226,6 +226,16 @@ class PresaleAllocation(Base):
     created_at: Mapped[datetime] = created()
 
 
+class PresaleSimulated(Base):
+    """A simulated contribution for the presale activity list and progress bar. Kept apart from
+    `presale_contributions`: never part of raised, the hard cap, allocations, the snapshot or crediting."""
+    __tablename__ = "presale_simulated"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    wallet_address: Mapped[str] = mapped_column(String(42), nullable=False)
+    amount_wei: Mapped[Decimal] = mapped_column(WEI, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+
+
 class PresaleContribution(Base):
     """A USDT transfer into the presale wallet (indexed from chain; `total_wei` is unused and kept 0)."""
     __tablename__ = "presale_contributions"
